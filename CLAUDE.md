@@ -92,3 +92,22 @@ domain 간 import 는 schema/types 만. service → service cross-import 는 피
 - **Stage 3**: contests / votes / results / R2 uploads.
 - **Stage 4**: 알림 / 신고 / 차단 / 감사 로그.
 - **Stage 5**: CI/CD + EC2 배포 + Cloudflare proxy.
+
+---
+
+## 📌 Next Session Entry — 필독 (이 줄을 무시하지 말 것)
+
+**다음 cycle 진입 / 자격증명 / 배포 정보 SSOT** → [`docs/deployment-credentials.md`](docs/deployment-credentials.md)
+
+해당 파일에 정리됨:
+- 라이브 인프라 좌표 (EC2 IP / SSH key / .env 경로 / PM2 / Nginx / R2 / Cloudflare zone)
+- 자격증명 현황표 (✅ 주입 완료 / ❌ empty / 🟡 미확인) — EC2 `.env` 실측 기준
+- 새로 발급해야 할 cred 절차 (Kakao OAuth / Cloudflare Origin Cert / Vision API)
+- JWT 회전 snippet
+- 다음 세션 진입 조건 A/B/C (Kakao 받음 / 새 기능 / 자격증명 회전)
+- 흩어진 자료 인덱스 (incident-response.md / dnf-classes.md / image-assets.md / _artifacts 등)
+
+**관련 SSOT:**
+- 장애 대응 → [`docs/incident-response.md`](docs/incident-response.md)
+- 던파 직업 매핑 → [`docs/dnf-classes.md`](docs/dnf-classes.md)
+- 이미지 자산 → [`docs/image-assets.md`](docs/image-assets.md)
