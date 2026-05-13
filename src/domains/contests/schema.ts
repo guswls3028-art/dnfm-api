@@ -33,13 +33,7 @@ import { SITE_CODES } from "../../shared/types/site.js";
  *   - voting    투표 기간
  *   - completed 결과 발표 끝
  */
-export const contestStatuses = [
-  "draft",
-  "open",
-  "judging",
-  "voting",
-  "completed",
-] as const;
+export const contestStatuses = ["draft", "open", "judging", "voting", "completed"] as const;
 export type ContestStatus = (typeof contestStatuses)[number];
 
 export const contests = pgTable(
@@ -49,12 +43,11 @@ export const contests = pgTable(
     site: varchar("site", { length: 16 }).notNull().$type<(typeof SITE_CODES)[number]>(),
     title: varchar("title", { length: 200 }).notNull(),
     description: text("description"),
-    status: varchar("status", { length: 16 })
-      .notNull()
-      .default("draft")
-      .$type<ContestStatus>(),
+    status: varchar("status", { length: 16 }).notNull().default("draft").$type<ContestStatus>(),
     // 참가 양식 (form_schema) — 어드민이 사이트별로 자유 정의
-    formSchema: jsonb("form_schema").notNull().default({} as Record<string, unknown>),
+    formSchema: jsonb("form_schema")
+      .notNull()
+      .default({} as Record<string, unknown>),
     // 참가 최대 개수 (0 = 무제한)
     maxEntries: integer("max_entries").notNull().default(0),
     // 마감 / 투표 기간 (UTC)
@@ -87,7 +80,10 @@ export const contestEntries = pgTable(
     // form_schema 에 맞춘 자유 양식 응답 (모험단명/캐릭터명/코디 제목/설명 등)
     fields: jsonb("fields").notNull(),
     // 업로드한 사진 R2 keys (여러 장 가능)
-    imageR2Keys: text("image_r2_keys").array().notNull().default([] as string[]),
+    imageR2Keys: text("image_r2_keys")
+      .array()
+      .notNull()
+      .default([] as string[]),
     // 어드민이 후보로 선정했는지
     selectedForVote: boolean("selected_for_vote").notNull().default(false),
     selectedAt: timestamp("selected_at", { withTimezone: true }),

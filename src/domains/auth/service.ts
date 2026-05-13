@@ -24,7 +24,7 @@ function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-async function issueTokens(
+export async function issueTokens(
   userId: string,
   tokenVersion: number,
   meta: { userAgent?: string; ipAddress?: string },

@@ -8,14 +8,13 @@ import { env } from "@/config/env.js";
 import { ok, created } from "@/shared/http/response.js";
 import { requireAuth } from "@/shared/http/middleware/auth.js";
 import type { User } from "./schema.js";
+import ocrRoutes from "./ocr-routes.js";
+import oauthRoutes from "./oauth-routes.js";
 
 const auth = new Hono();
 
 /** 두 쿠키 (access / refresh) 일관 설정. sibling subdomain 공유. */
-function setAuthCookies(
-  c: Parameters<typeof setCookie>[0],
-  tokens: AuthTokens,
-) {
+function setAuthCookies(c: Parameters<typeof setCookie>[0], tokens: AuthTokens) {
   setCookie(c, "access_token", tokens.accessToken, {
     httpOnly: true,
     secure: env.COOKIE_SECURE,
@@ -87,16 +86,18 @@ auth.get("/me", requireAuth(), async (c) => {
 });
 
 /**
- * TODO Stage 2 — OAuth (google / kakao):
- *   - GET  /auth/oauth/:provider/start
- *   - GET  /auth/oauth/:provider/callback
- *
+ * Sub-routers mount.
+ *   /auth/dnf-profile/ocr/:type  (multipart)
+ *   /auth/dnf-profile/confirm
+ *   /auth/oauth/:provider/start
+ *   /auth/oauth/:provider/callback
+ */
+auth.route("/dnf-profile", ocrRoutes);
+auth.route("/oauth", oauthRoutes);
+
+/**
  * TODO Stage 2 — refresh token rotation:
  *   - POST /auth/refresh
- *
- * TODO Stage 2 — 던파 OCR 프로필:
- *   - POST /auth/dnf-profile/ocr  (multipart, type=basic_info|character_list|character_select)
- *   - POST /auth/dnf-profile/confirm
  */
 
 export default auth;
