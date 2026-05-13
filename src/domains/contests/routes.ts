@@ -4,7 +4,9 @@ import { Hono } from "hono";
 import { isSiteAdmin } from "../../shared/auth/permissions.js";
 import { AppError } from "../../shared/errors/app-error.js";
 import { optionalAuth, requireAuth } from "../../shared/http/middleware/auth.js";
+import { writeRateLimit } from "../../shared/http/middleware/rate-limit.js";
 import { siteFromParam } from "../../shared/http/middleware/site.js";
+import { getClientIp } from "../../shared/http/client-ip.js";
 import { created, ok } from "../../shared/http/response.js";
 import type { SiteCode } from "../../shared/types/site.js";
 import { requireUuid } from "../../shared/validation/uuid.js";
@@ -40,16 +42,9 @@ import {
  * 비회원 정책 SSOT: project_anonymous_posting_policy.md (2026-05-14).
  * - entries 참가 = 비회원 가능 (회원 인증 강제 X). authorId null 일 때 anonymousMarker 표기.
  * - 수정/삭제 = guestPassword 본인 검증 또는 어드민.
+ *
+ * IP 추출은 shared helper `getClientIp` SSOT — cf-connecting-ip 우선.
  */
-function extractIp(c: { req: { header: (k: string) => string | undefined } }): string | undefined {
-  // Cloudflare 통과 시 CF-Connecting-IP. nginx 통과 시 X-Forwarded-For 첫 IP.
-  return (
-    c.req.header("cf-connecting-ip") ||
-    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
-    c.req.header("x-real-ip") ||
-    undefined
-  );
-}
 
 const contests = new Hono();
 
@@ -165,6 +160,7 @@ contests.get(
 contests.post(
   "/sites/:site/contests/:id/entries",
   optionalAuth(),
+  writeRateLimit, // 비회원 spam / 회원 도배 둘 다 방어. posts/comments 와 동일 정책.
   zValidator("json", createEntryDto),
   async (c) => {
     const site = c.get("site");
@@ -172,7 +168,7 @@ contests.post(
     const id = requireUuid(c.req.param("id"), "contest_not_found");
     const input = c.req.valid("json");
     const entry = await createEntry(site, id, userId, input, {
-      ipAddress: extractIp(c),
+      ipAddress: getClientIp(c),
       userAgent: c.req.header("user-agent"),
     });
     return created(c, { entry });
@@ -185,6 +181,7 @@ contests.post(
  */
 contests.delete(
   "/sites/:site/contests/:id/entries/:entryId",
+  writeRateLimit, // 비번 brute-force 방어 (IP 당 분당 20회).
   zValidator("json", deleteEntryDto),
   async (c) => {
     const site = c.get("site");

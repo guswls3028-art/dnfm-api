@@ -15,7 +15,13 @@ import {
   siteParam,
   updateCommentDto,
 } from "./dto.js";
-import { createComment, deleteComment, listByPost, updateComment } from "./service.js";
+import {
+  createComment,
+  deleteComment,
+  listByPost,
+  publicComment,
+  updateComment,
+} from "./service.js";
 
 const comments = new Hono();
 
@@ -50,7 +56,7 @@ comments.post(
       ipAddress: getClientIp(c),
       userAgent: getUserAgent(c),
     });
-    return created(c, { comment });
+    return created(c, { comment: publicComment(comment) });
   },
 );
 
@@ -66,7 +72,7 @@ comments.patch(
     const input = c.req.valid("json");
     const isAdmin = userId ? await isSiteAdmin(site, userId) : false;
     const comment = await updateComment(site, id, userId, isAdmin, input);
-    return ok(c, { comment });
+    return ok(c, { comment: publicComment(comment) });
   },
 );
 

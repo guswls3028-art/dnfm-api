@@ -31,6 +31,22 @@ export type RequestContext = {
 };
 
 /**
+ * 비회원 보안 — 응답 projection. authorPasswordHash (bcrypt) + anonymousAuditHash (sha256)
+ * 는 어드민 audit 전용. list/create 응답에는 노출 X.
+ */
+export function publicEntry<
+  T extends {
+    authorPasswordHash?: string | null;
+    anonymousAuditHash?: string | null;
+  },
+>(row: T) {
+  const { authorPasswordHash, anonymousAuditHash, ...rest } = row;
+  void authorPasswordHash;
+  void anonymousAuditHash;
+  return rest;
+}
+
+/**
  * 시각 검증 helper — 모든 시각 비교는 서버 시계 기준. 클라이언트 시간 신뢰 X.
  * (route 단에서 새로 new Date() 로 검사하므로 sql now() 와 약간의 drift 는 허용 — 동일 process tick 내).
  */
@@ -305,7 +321,7 @@ export async function createEntry(
       imageR2Keys: input.imageR2Keys,
     })
     .returning();
-  return inserted[0]!;
+  return publicEntry(inserted[0]!);
 }
 
 /**
@@ -371,7 +387,7 @@ export async function listEntries(site: SiteCode, contestId: string, query: List
   ]);
 
   return {
-    items: rows,
+    items: rows.map(publicEntry),
     page: query.page,
     pageSize: query.pageSize,
     total: totalRow[0]?.value ?? 0,

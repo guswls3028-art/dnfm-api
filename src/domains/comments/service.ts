@@ -18,6 +18,23 @@ export type RequestContext = {
 };
 
 /**
+ * 비회원 보안 — 응답에서 hash 필드 strip.
+ * authorPasswordHash (bcrypt) + anonymousAuditHash (sha256 IP+UA) 둘 다 어드민 audit 전용.
+ * 일반 list/get/create/update 응답에는 제외.
+ */
+function publicComment<
+  T extends {
+    authorPasswordHash?: string | null;
+    anonymousAuditHash?: string | null;
+  },
+>(row: T) {
+  const { authorPasswordHash, anonymousAuditHash, ...rest } = row;
+  void authorPasswordHash;
+  void anonymousAuditHash;
+  return rest;
+}
+
+/**
  * post 가 해당 site 에 속하고 살아 있는지 확인. cross-site 격리.
  */
 async function ensurePostInSite(site: SiteCode, postId: string) {
@@ -54,14 +71,18 @@ export async function listByPost(site: SiteCode, postId: string, query: ListComm
   ]);
 
   return {
-    items: rows,
+    items: rows.map(publicComment),
     page: query.page,
     pageSize: query.pageSize,
     total: totalRow[0]?.value ?? 0,
   };
 }
 
-/** 댓글 단건 조회 (soft delete 제외). site 격리 검사 포함. */
+/**
+ * 댓글 단건 조회 (soft delete 제외). site 격리 검사 포함.
+ * Internal — hash 컬럼 포함. update/delete 의 verifyAuthorPermission 가 hash 검증에 사용.
+ * HTTP 응답에는 [[publicComment]] 거쳐서 strip.
+ */
 export async function getCommentById(site: SiteCode, id: string) {
   const rows = await db
     .select()
@@ -74,6 +95,9 @@ export async function getCommentById(site: SiteCode, id: string) {
   await ensurePostInSite(site, row.postId);
   return row;
 }
+
+/** HTTP 응답용 public projection — hash 컬럼 제거. */
+export { publicComment };
 
 /**
  * 댓글 작성. 회원이면 authorId, 비회원이면 guestNickname + guestPassword.
@@ -120,14 +144,24 @@ export async function createComment(
   return inserted;
 }
 
-/** 비회원 수정/삭제 권한 검증 (posts 와 동일 패턴). */
+/**
+ * 비회원 수정/삭제 권한 검증 (posts 와 동일 패턴).
+ * 별도 select 로 hash fetch — public projection 의 strip 영향 X.
+ */
 async function verifyAuthorPermission(
-  comment: { authorId: string | null; authorPasswordHash: string | null },
+  commentId: string,
   actorId: string | null,
   guestPassword: string | undefined,
   isAdmin: boolean,
 ): Promise<boolean> {
   if (isAdmin) return true;
+  const rows = await db
+    .select({ authorId: comments.authorId, authorPasswordHash: comments.authorPasswordHash })
+    .from(comments)
+    .where(eq(comments.id, commentId))
+    .limit(1);
+  const comment = rows[0];
+  if (!comment) return false;
   if (comment.authorId) {
     return Boolean(actorId) && comment.authorId === actorId;
   }
@@ -143,11 +177,12 @@ export async function updateComment(
   isAdmin: boolean,
   input: UpdateCommentInput,
 ) {
-  const existing = await getCommentById(site, commentId);
-  const allowed = await verifyAuthorPermission(existing, actorId, input.guestPassword, isAdmin);
+  const existing = await getCommentById(site, commentId); // site 격리 검증
+  const allowed = await verifyAuthorPermission(commentId, actorId, input.guestPassword, isAdmin);
   if (!allowed) {
     throw AppError.forbidden("수정 권한이 없습니다.", "not_author");
   }
+  void existing;
   const updated = await db
     .update(comments)
     .set({
@@ -171,7 +206,8 @@ export async function deleteComment(
   guestPassword?: string,
 ): Promise<void> {
   const existing = await getCommentById(site, commentId);
-  const allowed = await verifyAuthorPermission(existing, actorId, guestPassword, isAdmin);
+  const allowed = await verifyAuthorPermission(commentId, actorId, guestPassword, isAdmin);
+  void existing;
   if (!allowed) {
     throw AppError.forbidden("삭제 권한이 없습니다.", "not_author");
   }

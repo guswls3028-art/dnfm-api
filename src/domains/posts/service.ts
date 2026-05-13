@@ -24,13 +24,24 @@ export type RequestContext = {
 /**
  * post + category 조인 결과 — frontend UI 가 category.name / slug 직접 표시.
  * category 가 null 이면 (orphan) categorySlug/Name 도 null.
+ *
+ * 비회원 보안:
+ *   - authorPasswordHash (bcrypt) 응답에서 strip — 약한 비번 dictionary attack 회피.
+ *   - anonymousAuditHash (sha256 IP+UA) 응답에서 strip — 익명성 보존 + fingerprint 노출 방지.
+ *   - 어드민 audit endpoint 가 따로 생기면 그쪽에서만 노출.
  */
-function enrichPost<T extends { categoryId: string | null }>(
-  row: T,
-  category: { id: string; slug: string; name: string } | null,
-) {
+function enrichPost<
+  T extends {
+    categoryId: string | null;
+    authorPasswordHash?: string | null;
+    anonymousAuditHash?: string | null;
+  },
+>(row: T, category: { id: string; slug: string; name: string } | null) {
+  const { authorPasswordHash, anonymousAuditHash, ...publicRow } = row;
+  void authorPasswordHash; // strip
+  void anonymousAuditHash; // strip
   return {
-    ...row,
+    ...publicRow,
     categorySlug: category?.slug ?? null,
     categoryName: category?.name ?? null,
   };
@@ -309,7 +320,7 @@ export async function createPost(
       attachmentR2Keys: input.attachmentR2Keys,
     })
     .returning();
-  return inserted[0]!;
+  return enrichPost(inserted[0]!, null);
 }
 
 /**
@@ -317,19 +328,27 @@ export async function createPost(
  * - 회원이면 authorId 일치만 검증.
  * - 비회원이면 guestPassword 가 저장된 hash 와 일치해야 함.
  * - hash 가 null 인 비회원 글은 본인 수정/삭제 불가 (어드민만).
+ *
+ * 별도 select 로 hash 직접 fetch — enrichPost (public projection) 가 strip 한 hash 를
+ * 다시 응답 path 로 끌어내지 않음.
  */
 async function verifyAuthorPermission(
-  post: { authorId: string | null; authorPasswordHash: string | null },
+  postId: string,
   actorId: string | null,
   guestPassword: string | undefined,
   isAdmin: boolean,
 ): Promise<boolean> {
   if (isAdmin) return true;
+  const rows = await db
+    .select({ authorId: posts.authorId, authorPasswordHash: posts.authorPasswordHash })
+    .from(posts)
+    .where(eq(posts.id, postId))
+    .limit(1);
+  const post = rows[0];
+  if (!post) return false;
   if (post.authorId) {
-    // 회원 글 — 본인만 가능
     return Boolean(actorId) && post.authorId === actorId;
   }
-  // 비회원 글 — guestPassword 매칭만 가능
   if (!post.authorPasswordHash || !guestPassword) return false;
   return verifyPassword(guestPassword, post.authorPasswordHash);
 }
@@ -345,11 +364,12 @@ export async function updatePost(
   isAdmin: boolean,
   input: UpdatePostInput,
 ) {
-  const existing = await getPostById(site, postId);
-  const allowed = await verifyAuthorPermission(existing, actorId, input.guestPassword, isAdmin);
+  const existing = await getPostById(site, postId); // site/deleted 검증 + public projection
+  const allowed = await verifyAuthorPermission(postId, actorId, input.guestPassword, isAdmin);
   if (!allowed) {
     throw AppError.forbidden("수정 권한이 없습니다.", "not_author");
   }
+  void existing; // site check 만 사용
 
   // pinned / locked 는 admin 만
   if ((input.pinned !== undefined || input.locked !== undefined) && !isAdmin) {
@@ -369,7 +389,7 @@ export async function updatePost(
     })
     .where(eq(posts.id, postId))
     .returning();
-  return updated[0]!;
+  return enrichPost(updated[0]!, null);
 }
 
 /**
@@ -382,11 +402,12 @@ export async function deletePost(
   isAdmin: boolean,
   guestPassword?: string,
 ): Promise<void> {
-  const existing = await getPostById(site, postId);
-  const allowed = await verifyAuthorPermission(existing, actorId, guestPassword, isAdmin);
+  const existing = await getPostById(site, postId); // site/deleted 검증
+  const allowed = await verifyAuthorPermission(postId, actorId, guestPassword, isAdmin);
   if (!allowed) {
     throw AppError.forbidden("삭제 권한이 없습니다.", "not_author");
   }
+  void existing;
   await db.update(posts).set({ deletedAt: new Date() }).where(eq(posts.id, postId));
 }
 
