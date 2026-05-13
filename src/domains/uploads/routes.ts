@@ -62,13 +62,25 @@ uploads.post(
  */
 uploads.post("/uploads/file", requireAuth(), async (c) => {
   const userId = c.get("userId");
-  const form = await c.req.formData();
-  const file = form.get("file");
+  let form: FormData;
+  try {
+    form = await c.req.formData();
+  } catch (err) {
+    throw AppError.badRequest("multipart/form-data 형식이 아닙니다.", "invalid_form");
+  }
+  const fileEntry = form.get("file");
   const purposeRaw = String(form.get("purpose") || "");
 
-  if (!(file instanceof File)) {
+  // file-like 검사 (Blob | File 모두 OK — duck typing)
+  if (
+    !fileEntry ||
+    typeof fileEntry === "string" ||
+    typeof (fileEntry as Blob).arrayBuffer !== "function"
+  ) {
     throw AppError.badRequest("file 필드가 없거나 형식이 아닙니다.", "missing_file");
   }
+  const file = fileEntry as Blob & { name?: string; type?: string; size: number };
+
   if (!uploadPurposes.includes(purposeRaw as (typeof uploadPurposes)[number])) {
     throw AppError.badRequest("purpose 가 올바르지 않습니다.", "invalid_purpose");
   }
