@@ -11,16 +11,18 @@
 
 ## 0. 라이브 운영 인프라 좌표
 
+> ⚠️ **2026-05-13 정체성 변경**: `allow` → `hurock` (인터넷 방송인 허락님 페이지). CLAUDE.md / 도메인 mental model 은 `hurock` 이 SSOT. **라이브 인프라(아래 표)는 아직 `allow` 식별자로 운영 중** — §7 rename 백로그 참조. 신규 코드 작성 시 새 식별자 사용하지 말 것 (DB site 컬럼 enum 일관성 위해 rename 마이그레이션 완료 후에만 전환).
+
 | 항목 | 값 / 위치 |
 |---|---|
 | EC2 인스턴스 | `3.36.42.231` (ap-northeast-2, t4g.nano, EBS 16GB) |
 | EC2 SSH 키 | `/tmp/dnfm/ic` (로컬 작업머신) |
 | EC2 .env | `/var/www/dnfm-api/.env` |
-| EC2 PM2 process | `dnfm-api`, `dnfm-newb`, `dnfm-allow` (3개) |
+| EC2 PM2 process | `dnfm-api`, `dnfm-newb`, `dnfm-allow` (3개. **allow 식별자 = hurock 페이지**) |
 | EC2 Nginx | `/etc/nginx/sites-available/{api,newb,allow}.conf` host 분기 |
-| Cloudflare zone | `dnfm.kr` (4 DNS — apex/www/allow/api 모두 proxied orange) |
+| Cloudflare zone | `dnfm.kr` (4 DNS — apex/www/allow/api 모두 proxied orange. allow.dnfm.kr 라이브 = hurock 페이지) |
 | R2 버킷 | `dnfm-uploads` |
-| GitHub 3 repo | `guswls3028-art/{dnfm,dnfm-allow,dnfm-api}` |
+| GitHub 3 repo | `guswls3028-art/{dnfm,dnfm-allow,dnfm-api}` (※ `dnfm-allow` 의 로컬 작업 디렉토리 = `C:\academy\dnfm\allow\`. CLAUDE.md identity = `dnfm-hurock`) |
 | 로컬 PAT | `c:/academy/.secrets/github-pat.txt` (academy 세션과 공유) |
 
 ## 1. 자격증명 현황표 (2026-05-13 EC2 실측)
@@ -145,7 +147,8 @@ pm2 restart dnfm-api --update-env
 | 던파 직업 매핑 | `api/docs/dnf-classes.md` | OCR → 직업 enum 매핑 표 |
 | 이미지 자산 | `api/docs/image-assets.md` | 방장 프사/배너/사이드 자산 좌표 |
 | EC2 배포 스크립트 14종 | `C:/academy/_artifacts/dnfm-deploy/` | scp/ssh/nginx/pm2 자동화 |
-| Playwright 시각 검수 캡처 44장 | `C:/academy/_artifacts/dnfm-visual/screenshots/20260513-1725/` | 라이브 라우트 회귀 baseline |
+| Playwright standalone 검수 도구 | `C:/academy/_artifacts/dnfm-visual/` | 자체 `node_modules` + `capture.mjs` / `probe-guilds.mjs` / `probe-guilds-rect.mjs`. repo 안에는 정식 e2e/playwright.config 없음 — 검수 시 이 폴더 cd 후 실행 |
+| 시각 검수 캡처 baseline | `C:/academy/_artifacts/dnfm-visual/screenshots/20260513-1725/` (44장 초회) + `20260513-211702/` (재검수) | 라이브 라우트 회귀 비교 baseline |
 | api `.env.example` | `api/.env.example` | envvar 키 리스트 + 주석 |
 | newb CLAUDE.md | `newb/CLAUDE.md` | dnfm.kr frontend 룰 |
 | allow CLAUDE.md | `allow/CLAUDE.md` | allow.dnfm.kr frontend 룰 |
@@ -158,3 +161,33 @@ pm2 restart dnfm-api --update-env
 - `git add -A` 금지 (academy 정책과 동일 — 실수로 secret 포함 위험)
 - AWS CLI 호출 전 `unset AWS_ACCESS_KEY_ID && unset AWS_SECRET_ACCESS_KEY` (R2 키가 IAM 키 덮어쓰는 사고 회피)
 - Cloudflare Global API Key 노출 시 즉시 rotate (이전 세션에서 노출된 적 있음 — 사용자 확인 필요)
+- **§7 rename 백로그 단계를 단편적으로 진행 금지.** site 컬럼 enum (allow → hurock) 변경은 사용자 작성 데이터(글/콘테스트/투표) row 의 키 값 변경 — destructive on user data. anti-avoidance §8 위반. 사용자 명시 승인 + 전체 9단계 한 트랜잭션으로만.
+
+## 7. 차기 rename 백로그 — allow → hurock (라이브 인프라)
+
+> 정체성은 `hurock` (인터넷 방송인 허락님 페이지) 으로 결정 (2026-05-13 CLAUDE.md 갱신). 라이브 인프라는 아직 `allow` 식별자. 아래 9단계가 한 패키지 — **부분 진행 시 라우팅·CORS·DB 미스매치로 사이트 다운 가능**. 진행 전 사용자 명시 승인 필요.
+
+### 사전 점검
+- [ ] DB `site` 컬럼 사용 row 수 카운트 (`SELECT site, COUNT(*) FROM posts GROUP BY site;`)
+- [ ] backend `site === 'allow'` literal grep (도메인 분기 / signals / services)
+- [ ] frontend (newb / allow) cross-link 의 `allow.dnfm.kr` literal grep
+- [ ] read-only 백업: `_artifacts/backups/YYYY-MM-DD_allow-to-hurock/` (DB dump + nginx conf + env)
+
+### 9단계 (한 트랜잭션)
+1. **GitHub repo rename**: `dnfm-allow` → `dnfm-hurock` (GitHub dashboard. URL redirect 자동 일정 기간). 로컬 `git remote set-url`.
+2. **로컬 디렉토리 rename**: `C:\academy\dnfm\allow\` → `C:\academy\dnfm\hurock\` (Claude session cwd lock 회피 위해 별도 PowerShell).
+3. **Cloudflare DNS**: `hurock.dnfm.kr` A record 신규 생성 (proxied orange) → 라이브 확인 후 `allow.dnfm.kr` 유지 결정 (redirect 추천).
+4. **Cloudflare Origin Cert** (Full strict 미적용 상태면 무관, 적용 후면 `*.dnfm.kr` cert 가 hurock 자동 포함).
+5. **EC2 Nginx**: `/etc/nginx/sites-available/allow.conf` → `hurock.conf` (server_name 동시 변경, allow → hurock + allow 유지 시 redirect server block).
+6. **EC2 PM2 ecosystem**: `dnfm-allow` process → `dnfm-hurock` (`pm2 delete` + `pm2 start` + `pm2 save`).
+7. **Backend env**: `CORS_ORIGINS` 의 `https://allow.dnfm.kr` 옆에 `https://hurock.dnfm.kr` 추가 (allow 단계 폐기는 §9 마지막 step). `ALLOWED_SITES=newb,allow` → `newb,allow,hurock` (점진).
+8. **Backend 코드 분기**: `site === 'allow'` 매칭에 `|| site === 'hurock'` 추가 (한동안 dual). 또는 단방향 alias.
+9. **DB site 컬럼 마이그레이션** ⚠️ **destructive on user data — 최종 단계, 별도 명시 승인**:
+   - migration `UPDATE posts SET site='hurock' WHERE site='allow';` (그리고 comments / contests / votes / likes / uploads / site_membership 모든 테이블).
+   - 동시에 backend `ALLOWED_SITES`/CORS 의 `allow` 폐기.
+   - Nginx `allow.dnfm.kr` server block 은 → 301 to `hurock.dnfm.kr` 로 한정.
+
+### 부분 진행 금지 사유
+- 1~6 만 하고 9 안 하면: 신규 hurock 트래픽 → DB `site='allow'` row 안 보임 (cross-site 격리 정책상)
+- 9 만 하고 1~6 안 하면: 모든 사용자 데이터 즉시 invisible (라우팅이 allow 식별자 기대)
+- backend 8 dual 분기 없이 9 만: 라이브 사이트 500
