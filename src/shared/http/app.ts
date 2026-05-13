@@ -14,6 +14,7 @@ import commentsRoutes from "@/domains/comments/routes.js";
 import likesRoutes from "@/domains/likes/routes.js";
 import uploadsRoutes from "@/domains/uploads/routes.js";
 import contestsRoutes from "@/domains/contests/routes.js";
+import heroBannersRoutes from "@/domains/hero_banners/routes.js";
 
 /**
  * Hono app factory.
@@ -46,6 +47,8 @@ export function createApp() {
   app.route("/", contestsRoutes);
   // /uploads/presigned-put + /uploads/:id/confirm
   app.route("/", uploadsRoutes);
+  // /sites/:site/hero-banners (admin CRUD + public list)
+  app.route("/", heroBannersRoutes);
 
   // TODO Stage 2/3: /me/profile, /admin/*
 
