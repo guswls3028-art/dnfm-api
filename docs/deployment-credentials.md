@@ -15,14 +15,14 @@
 
 | 항목 | 값 / 위치 |
 |---|---|
-| EC2 인스턴스 | `3.36.42.231` (ap-northeast-2, t4g.nano, EBS 16GB) |
+| EC2 인스턴스 | `43.202.246.97` (EIP 고정, ap-northeast-2, t4g.small, EBS 16GB. 2026-05-14 t4g.nano 에서 리사이즈) |
 | EC2 SSH 키 | `/tmp/dnfm/ic` (로컬 작업머신) |
 | EC2 .env | `/var/www/dnfm-api/.env` |
-| EC2 PM2 process | `dnfm-api`, `dnfm-newb`, `dnfm-allow` (3개. **allow 식별자 = hurock 페이지**) |
-| EC2 Nginx | `/etc/nginx/sites-available/{api,newb,allow}.conf` host 분기 |
-| Cloudflare zone | `dnfm.kr` (4 DNS — apex/www/allow/api 모두 proxied orange. allow.dnfm.kr 라이브 = hurock 페이지) |
+| EC2 PM2 process | `dnfm-api`, `dnfm-newb`, `dnfm-hurock` (3개) |
+| EC2 Nginx | `/etc/nginx/conf.d/dnfm.conf` (allow.dnfm.kr → 301 redirect to hurock.dnfm.kr) |
+| Cloudflare zone | `dnfm.kr` (5 DNS — apex/www/hurock/allow/api 모두 proxied orange. allow → 301 redirect via Nginx) |
 | R2 버킷 | `dnfm-uploads` |
-| GitHub 3 repo | `guswls3028-art/{dnfm, dnfm-hurock, dnfm-api}` (※ `dnfm-hurock` 의 로컬 작업 디렉토리는 아직 `C:\academy\dnfm\allow\`. CLAUDE.md identity = `dnfm-hurock`. 라이브 도메인은 `allow.dnfm.kr` 그대로) |
+| GitHub 3 repo | `guswls3028-art/{dnfm, dnfm-hurock, dnfm-api}` |
 | 로컬 PAT | `c:/academy/.secrets/github-pat.txt` (academy 세션과 공유) |
 
 ## 1. 자격증명 현황표 (2026-05-13 EC2 실측)
@@ -175,11 +175,11 @@ pm2 restart dnfm-api --update-env
 
 ### 9단계 (한 트랜잭션)
 1. ✅ **GitHub repo rename**: `dnfm-allow` → `dnfm-hurock` **완료** (2026-05-13 사용자 본인 실행. 로컬 `git remote -v` 확인 — `dnfm-hurock.git`).
-2. ⬜ **로컬 디렉토리 rename**: `C:\academy\dnfm\allow\` → `C:\academy\dnfm\hurock\` (Claude session cwd lock 회피 위해 별도 PowerShell).
+2. ✅ **로컬 디렉토리 rename**: `C:\academy\dnfm\allow\` → `C:\academy\dnfm\hurock\` **완료** (2026-05-14).
 3. **Cloudflare DNS**: `hurock.dnfm.kr` A record 신규 생성 (proxied orange) → 라이브 확인 후 `allow.dnfm.kr` 유지 결정 (redirect 추천).
 4. **Cloudflare Origin Cert** (Full strict 미적용 상태면 무관, 적용 후면 `*.dnfm.kr` cert 가 hurock 자동 포함).
 5. **EC2 Nginx**: `/etc/nginx/sites-available/allow.conf` → `hurock.conf` (server_name 동시 변경, allow → hurock + allow 유지 시 redirect server block).
-6. **EC2 PM2 ecosystem**: `dnfm-allow` process → `dnfm-hurock` (`pm2 delete` + `pm2 start` + `pm2 save`).
+6. ✅ **EC2 PM2 ecosystem**: `dnfm-allow` process → `dnfm-hurock` 완료.
 7. **Backend env**: `CORS_ORIGINS` 의 `https://allow.dnfm.kr` 옆에 `https://hurock.dnfm.kr` 추가 (allow 단계 폐기는 §9 마지막 step). `ALLOWED_SITES=newb,allow` → `newb,allow,hurock` (점진).
 8. **Backend 코드 분기**: `site === 'allow'` 매칭에 `|| site === 'hurock'` 추가 (한동안 dual). 또는 단방향 alias.
 9. **DB site 컬럼 마이그레이션** ⚠️ **destructive on user data — 최종 단계, 별도 명시 승인**:

@@ -7,7 +7,7 @@
 - **단일 서비스 / 단일 DB / 단일 인증**. 사이트별 데이터는 `site` 컬럼으로 격리.
 - **자매 repo**:
   - `guswls3028-art/dnfm` — newb frontend (`dnfm.kr`)
-  - `guswls3028-art/dnfm-allow` — allow frontend (`allow.dnfm.kr`)
+  - `guswls3028-art/dnfm-hurock` — hurock frontend (`hurock.dnfm.kr`)
 - 두 frontend repo 와 코드 공유 없음. fetch 만.
 - **현재 버전**: 0.1.0 (Stage 1 — 백엔드 골격).
 
@@ -75,7 +75,7 @@ domain 간 import 는 schema/types 만. service → service cross-import 는 피
 
 ## E. 자매 사이트 격리 정책 (절대)
 
-- frontend 두 repo (`dnfm`, `dnfm-allow`) 와 코드 공유 X.
+- frontend 두 repo (`dnfm`, `dnfm-hurock`) 와 코드 공유 X.
 - 모든 사이트별 데이터는 `site = "newb" | "allow"` 컬럼으로 격리. cross-site 접근 금지 (super 권한 우회만).
 - API path 에 site 명시: `/sites/:site/posts/...`. 사이트 결정은 [[shared/http/middleware/site]] 가 URL param / X-Site-Code 헤더 / Origin 추론으로.
 
