@@ -12,6 +12,7 @@ import {
   announceResultsDto,
   createContestDto,
   createEntryDto,
+  deleteEntryDto,
   listContestsQuery,
   listEntriesQuery,
   selectForVoteDto,
@@ -24,6 +25,7 @@ import {
   createContest,
   createEntry,
   deleteContest,
+  deleteEntryAsGuest,
   getContest,
   listContests,
   listEntries,
@@ -33,6 +35,21 @@ import {
   updateContest,
   voteForEntry,
 } from "./service.js";
+
+/**
+ * 비회원 정책 SSOT: project_anonymous_posting_policy.md (2026-05-14).
+ * - entries 참가 = 비회원 가능 (회원 인증 강제 X). authorId null 일 때 anonymousMarker 표기.
+ * - 수정/삭제 = guestPassword 본인 검증 또는 어드민.
+ */
+function extractIp(c: { req: { header: (k: string) => string | undefined } }): string | undefined {
+  // Cloudflare 통과 시 CF-Connecting-IP. nginx 통과 시 X-Forwarded-For 첫 IP.
+  return (
+    c.req.header("cf-connecting-ip") ||
+    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
+    c.req.header("x-real-ip") ||
+    undefined
+  );
+}
 
 const contests = new Hono();
 
@@ -141,18 +158,44 @@ contests.get(
   },
 );
 
-/** POST /sites/:site/contests/:id/entries — 회원 참가. */
+/**
+ * POST /sites/:site/contests/:id/entries — 참가.
+ * 회원/비회원 둘 다 허용. 비회원은 dto 의 guestNickname/guestPassword 로.
+ */
 contests.post(
   "/sites/:site/contests/:id/entries",
-  requireAuth(),
+  optionalAuth(),
   zValidator("json", createEntryDto),
   async (c) => {
     const site = c.get("site");
-    const userId = c.get("userId");
+    const userId = c.get("userId") ?? null;
     const id = requireUuid(c.req.param("id"), "contest_not_found");
     const input = c.req.valid("json");
-    const entry = await createEntry(site, id, userId, input);
+    const entry = await createEntry(site, id, userId, input, {
+      ipAddress: extractIp(c),
+      userAgent: c.req.header("user-agent"),
+    });
     return created(c, { entry });
+  },
+);
+
+/**
+ * DELETE /sites/:site/contests/:id/entries/:entryId — 비회원 본인 삭제.
+ * guestPassword 가 authorPasswordHash 와 매치돼야 함. 회원 entry / admin 삭제는 별도 path.
+ */
+contests.delete(
+  "/sites/:site/contests/:id/entries/:entryId",
+  zValidator("json", deleteEntryDto),
+  async (c) => {
+    const site = c.get("site");
+    const id = requireUuid(c.req.param("id"), "contest_not_found");
+    const entryId = requireUuid(c.req.param("entryId"), "entry_not_found");
+    const input = c.req.valid("json");
+    if (!input.guestPassword) {
+      throw AppError.badRequest("비밀번호가 필요합니다.", "guest_password_required");
+    }
+    const result = await deleteEntryAsGuest(site, id, entryId, input.guestPassword);
+    return ok(c, result);
   },
 );
 

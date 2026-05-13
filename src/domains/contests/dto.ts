@@ -52,12 +52,24 @@ export const listContestsQuery = z.object({
 });
 export type ListContestsQuery = z.infer<typeof listContestsQuery>;
 
-/** entry 생성 (회원). fields 는 form_schema 에 맞춰 자유 JSON. */
+/**
+ * entry 생성. 회원이면 인증으로, 비회원이면 guest 필드로.
+ * 정책 SSOT: project_anonymous_posting_policy.md (2026-05-14).
+ */
 export const createEntryDto = z.object({
   fields: z.record(z.string(), z.unknown()).default({}),
   imageR2Keys: z.array(z.string().max(512)).max(20).default([]),
+  // 비회원 작성용 (디시 스타일). 회원 인증 있으면 무시.
+  guestNickname: z.string().trim().min(1).max(32).optional(),
+  guestPassword: z.string().min(4).max(128).optional(),
 });
 export type CreateEntryInput = z.infer<typeof createEntryDto>;
+
+/** entry 삭제 — 비회원이면 guestPassword 본인 검증. 어드민은 무조건 통과 (route 단). */
+export const deleteEntryDto = z.object({
+  guestPassword: z.string().min(1).max(128).optional(),
+});
+export type DeleteEntryInput = z.infer<typeof deleteEntryDto>;
 
 /** entry list 쿼리. */
 export const listEntriesQuery = z.object({

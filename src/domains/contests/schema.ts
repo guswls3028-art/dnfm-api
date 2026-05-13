@@ -74,9 +74,17 @@ export const contestEntries = pgTable(
     contestId: uuid("contest_id")
       .notNull()
       .references(() => contests.id, { onDelete: "cascade" }),
-    authorId: uuid("author_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+    // null 이면 비회원 entry. anonymousMarker / authorNickname 으로 표시.
+    // 정책 SSOT: ~/.claude/projects/.../memory/project_anonymous_posting_policy.md (2026-05-14)
+    authorId: uuid("author_id").references(() => users.id, { onDelete: "cascade" }),
+    // 비회원 작성자 닉네임 (디시 스타일, default "ㅇㅇ"). authorId null 일 때만.
+    authorNickname: varchar("author_nickname", { length: 32 }),
+    // 비회원 수정/삭제 권한 검증용. bcrypt 해시. null 이면 비번 없음 = 수정/삭제 불가.
+    authorPasswordHash: varchar("author_password_hash", { length: 255 }),
+    // 비회원 표시용 (예: "114.207"). authorId null 일 때만.
+    anonymousMarker: varchar("anonymous_marker", { length: 16 }),
+    // 어드민 audit + IP밴 검증용. 전체 IP + UA sha-256.
+    anonymousAuditHash: varchar("anonymous_audit_hash", { length: 128 }),
     // form_schema 에 맞춘 자유 양식 응답 (모험단명/캐릭터명/코디 제목/설명 등)
     fields: jsonb("fields").notNull(),
     // 업로드한 사진 R2 keys (여러 장 가능)

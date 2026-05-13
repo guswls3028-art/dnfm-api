@@ -1,4 +1,10 @@
 import { and, eq, desc, asc, sql, count, isNull } from "drizzle-orm";
+import {
+  buildAnonymousAuditHash,
+  buildAnonymousMarker,
+  sanitizeGuestNickname,
+} from "../../shared/anonymous/anonymous.js";
+import { hashPassword, verifyPassword } from "../../shared/crypto/password.js";
 import { db } from "../../shared/db/client.js";
 import {
   contests,
@@ -18,6 +24,11 @@ import type {
   ListEntriesQuery,
   AnnounceResultsInput,
 } from "./dto.js";
+
+export type RequestContext = {
+  ipAddress?: string;
+  userAgent?: string;
+};
 
 /**
  * 시각 검증 helper — 모든 시각 비교는 서버 시계 기준. 클라이언트 시간 신뢰 X.
@@ -242,8 +253,9 @@ export async function deleteContest(site: SiteCode, id: string): Promise<void> {
 export async function createEntry(
   site: SiteCode,
   contestId: string,
-  authorId: string,
+  authorId: string | null,
   input: CreateEntryInput,
+  ctx: RequestContext = {},
 ) {
   const contest = await requireContest(site, contestId);
 
@@ -265,16 +277,72 @@ export async function createEntry(
     }
   }
 
+  // 비회원 path — IP marker + bcrypt password + audit hash. posts/comments 와 동일 패턴.
+  const isGuest = !authorId;
+  let guestNickname: string | null = null;
+  let guestPasswordHash: string | null = null;
+  let anonymousMarker: string | null = null;
+  let anonymousAuditHash: string | null = null;
+  if (isGuest) {
+    guestNickname = sanitizeGuestNickname(input.guestNickname);
+    if (input.guestPassword) {
+      guestPasswordHash = await hashPassword(input.guestPassword);
+    }
+    anonymousMarker = buildAnonymousMarker(ctx.ipAddress);
+    anonymousAuditHash = buildAnonymousAuditHash(ctx.ipAddress, ctx.userAgent);
+  }
+
   const inserted = await db
     .insert(contestEntries)
     .values({
       contestId,
       authorId,
+      authorNickname: guestNickname,
+      authorPasswordHash: guestPasswordHash,
+      anonymousMarker,
+      anonymousAuditHash,
       fields: input.fields,
       imageR2Keys: input.imageR2Keys,
     })
     .returning();
   return inserted[0]!;
+}
+
+/**
+ * 비회원 entry 삭제 — guestPassword 가 authorPasswordHash 와 매치되어야 함.
+ * 어드민 / 회원 본인 삭제 path 는 별도 (route 단 권한 분기 후 직접 deleteEntryByAdmin/Author 호출).
+ */
+export async function deleteEntryAsGuest(
+  site: SiteCode,
+  contestId: string,
+  entryId: string,
+  guestPassword: string,
+) {
+  await requireContest(site, contestId);
+  const rows = await db
+    .select()
+    .from(contestEntries)
+    .where(and(eq(contestEntries.id, entryId), eq(contestEntries.contestId, contestId)))
+    .limit(1);
+  const entry = rows[0];
+  if (!entry || entry.deletedAt) {
+    throw AppError.notFound("참가작을 찾을 수 없습니다.", "entry_not_found");
+  }
+  if (entry.authorId !== null) {
+    throw AppError.forbidden("회원이 작성한 참가작은 비번 삭제 불가합니다.", "member_entry");
+  }
+  if (!entry.authorPasswordHash) {
+    throw AppError.forbidden("비번 없는 비회원 참가작은 삭제 불가합니다.", "no_guest_password");
+  }
+  const ok = await verifyPassword(guestPassword, entry.authorPasswordHash);
+  if (!ok) {
+    throw AppError.forbidden("비밀번호가 일치하지 않습니다.", "password_mismatch");
+  }
+  await db
+    .update(contestEntries)
+    .set({ deletedAt: now() })
+    .where(eq(contestEntries.id, entryId));
+  return { deleted: true };
 }
 
 /** entry list — 사이트 격리 검증 + 선택 필터. */
