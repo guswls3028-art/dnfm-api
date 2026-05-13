@@ -3,11 +3,14 @@ import { Hono } from "hono";
 import { setCookie, deleteCookie, getCookie } from "hono/cookie";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { localSignupDto, localLoginDto } from "./dto.js";
+import { localSignupDto, localLoginDto, updateProfileDto, changePasswordDto } from "./dto.js";
 import {
   localSignup,
   localLogin,
   logoutByRefresh,
+  rotateRefreshToken,
+  updateUserProfile,
+  changePassword,
   isUsernameAvailable,
   isDisplayNameAvailable,
   type AuthTokens,
@@ -146,6 +149,62 @@ auth.get("/me", requireAuth(), async (c) => {
 });
 
 /**
+ * POST /auth/refresh — refresh token rotation.
+ *   - 쿠키 refresh_token → verify → rotate → 새 access + 새 refresh
+ *   - reuse 감지 시 tokenVersion bump (전 디바이스 강제 로그아웃)
+ */
+auth.post("/refresh", authRateLimit, async (c) => {
+  const refresh = getCookie(c, "refresh_token");
+  if (!refresh) {
+    clearAuthCookies(c);
+    return ok(c, { ok: false, reason: "no_refresh_cookie" }, undefined);
+  }
+  try {
+    const result = await rotateRefreshToken(refresh, {
+      userAgent: c.req.header("user-agent") ?? undefined,
+      ipAddress: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
+    });
+    setAuthCookies(c, result.tokens);
+    return ok(c, { user: publicUser(result.user) });
+  } catch (err) {
+    // refresh 실패 시 cookie 도 같이 정리
+    clearAuthCookies(c);
+    throw err;
+  }
+});
+
+/**
+ * PATCH /auth/me — 본인 프로필 수정.
+ *   displayName / email / avatarR2Key / dnfProfile
+ */
+auth.patch("/me", requireAuth(), zValidator("json", updateProfileDto), async (c) => {
+  const user = c.get("user");
+  const input = c.req.valid("json");
+  const updated = await updateUserProfile(user.id, input);
+  const siteRoles = await getAllUserSiteRoles(updated.id);
+  return ok(c, { user: { ...publicUser(updated), siteRoles } });
+});
+
+/**
+ * POST /auth/change-password — 비밀번호 변경.
+ *   현재 비번 검증 + 새 비번 정책 + tokenVersion bump (전 세션 무효화).
+ *   클라이언트는 응답 후 다시 로그인해야 함.
+ */
+auth.post(
+  "/change-password",
+  requireAuth(),
+  authRateLimit,
+  zValidator("json", changePasswordDto),
+  async (c) => {
+    const user = c.get("user");
+    const input = c.req.valid("json");
+    await changePassword(user.id, input);
+    clearAuthCookies(c);
+    return ok(c, { ok: true });
+  },
+);
+
+/**
  * Sub-routers mount.
  *   /auth/dnf-profile/ocr/:type  (multipart)
  *   /auth/dnf-profile/confirm
@@ -154,10 +213,5 @@ auth.get("/me", requireAuth(), async (c) => {
  */
 auth.route("/dnf-profile", ocrRoutes);
 auth.route("/oauth", oauthRoutes);
-
-/**
- * TODO Stage 2 — refresh token rotation:
- *   - POST /auth/refresh
- */
 
 export default auth;

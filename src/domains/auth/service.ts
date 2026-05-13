@@ -158,3 +158,150 @@ export async function logoutByRefresh(refreshToken: string): Promise<void> {
     .set({ revoked: true, revokedAt: new Date() })
     .where(and(eq(refreshTokens.tokenHash, sha256(refreshToken)), eq(refreshTokens.revoked, false)));
 }
+
+/**
+ * Refresh token rotation.
+ *
+ * 1) 들어온 raw token 으로 JWT verify (만료/시그니처)
+ * 2) tokenHash 로 DB row 조회 → 미존재 / revoked / expired 면 401
+ * 3) user.token_version 과 row.token_version 일치 검사 (비번 변경 등으로 bump 됐으면 reject)
+ * 4) 기존 row revoke + 새 토큰 발급 (rotation)
+ *
+ * 정책:
+ *   - reuse 감지 (revoked row 에 다시 들어오면) → 의심스러우니 그 user 의 token_version bump 해서 전 디바이스 로그아웃
+ */
+export async function rotateRefreshToken(
+  rawRefreshToken: string,
+  meta: { userAgent?: string; ipAddress?: string },
+): Promise<AuthResult> {
+  // 1) JWT verify
+  let payload: { sub: string; jti: string };
+  try {
+    const { verifyRefreshToken } = await import("@/shared/crypto/jwt.js");
+    payload = verifyRefreshToken(rawRefreshToken);
+  } catch {
+    throw AppError.unauthorized("세션이 만료됐습니다. 다시 로그인해 주세요.", "refresh_invalid");
+  }
+
+  const tokenHash = sha256(rawRefreshToken);
+  const rows = await db
+    .select()
+    .from(refreshTokens)
+    .where(eq(refreshTokens.tokenHash, tokenHash))
+    .limit(1);
+  const row = rows[0];
+  if (!row) {
+    throw AppError.unauthorized("세션이 만료됐습니다. 다시 로그인해 주세요.", "refresh_missing");
+  }
+
+  // 2) reuse detect — 이미 revoked 상태로 들어오면 도용 의심
+  if (row.revoked) {
+    await db.update(users).set({ tokenVersion: row.tokenVersion + 1 }).where(eq(users.id, row.userId));
+    throw AppError.unauthorized("세션이 만료됐습니다. 다시 로그인해 주세요.", "refresh_reused");
+  }
+  if (row.expiresAt.getTime() <= Date.now()) {
+    throw AppError.unauthorized("세션이 만료됐습니다. 다시 로그인해 주세요.", "refresh_expired");
+  }
+
+  // 3) user 검증
+  const userRows = await db.select().from(users).where(eq(users.id, row.userId)).limit(1);
+  const user = userRows[0];
+  if (!user || user.status !== "active") {
+    throw AppError.unauthorized("계정을 사용할 수 없습니다.", "account_inactive");
+  }
+  if (user.tokenVersion !== row.tokenVersion) {
+    throw AppError.unauthorized("세션이 만료됐습니다. 다시 로그인해 주세요.", "token_version_mismatch");
+  }
+  if (user.id !== payload.sub) {
+    throw AppError.unauthorized("세션이 만료됐습니다. 다시 로그인해 주세요.", "refresh_subject_mismatch");
+  }
+
+  // 4) rotate — 기존 revoke + 새 발급
+  await db
+    .update(refreshTokens)
+    .set({ revoked: true, revokedAt: new Date() })
+    .where(eq(refreshTokens.id, row.id));
+
+  const tokens = await issueTokens(user.id, user.tokenVersion, meta);
+  return { user, tokens };
+}
+
+/** 프로필 수정 — displayName/email/avatar/dnfProfile. displayName 중복 검사. */
+export async function updateUserProfile(
+  userId: string,
+  input: {
+    displayName?: string;
+    email?: string | null;
+    avatarR2Key?: string | null;
+    dnfProfile?: User["dnfProfile"];
+  },
+): Promise<User> {
+  if (input.displayName !== undefined) {
+    const existing = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.displayName, input.displayName))
+      .limit(1);
+    const taken = existing[0];
+    if (taken && taken.id !== userId) {
+      throw AppError.conflict("이미 사용 중인 닉네임입니다.", "display_name_taken");
+    }
+  }
+
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (input.displayName !== undefined) patch.displayName = input.displayName;
+  if (input.email !== undefined) patch.email = input.email;
+  if (input.avatarR2Key !== undefined) patch.avatarR2Key = input.avatarR2Key;
+  if (input.dnfProfile !== undefined) patch.dnfProfile = input.dnfProfile;
+
+  const updated = await db.update(users).set(patch).where(eq(users.id, userId)).returning();
+  const user = updated[0];
+  if (!user) throw AppError.notFound("계정을 찾을 수 없습니다.", "user_not_found");
+  return user;
+}
+
+/**
+ * 비밀번호 변경 — 현재 비번 확인 → 새 비번 정책 검사 → hash 교체 + tokenVersion bump
+ * (모든 기존 세션 무효화).
+ */
+export async function changePassword(
+  userId: string,
+  input: { currentPassword: string; newPassword: string },
+): Promise<void> {
+  const credRows = await db
+    .select()
+    .from(userLocalCredentials)
+    .where(eq(userLocalCredentials.userId, userId))
+    .limit(1);
+  const cred = credRows[0];
+  if (!cred) {
+    throw AppError.badRequest("자체 로그인 자격증명이 없습니다.", "no_local_credentials");
+  }
+
+  const ok = await verifyPassword(input.currentPassword, cred.passwordHash);
+  if (!ok) {
+    throw AppError.unauthorized("현재 비밀번호가 올바르지 않습니다.", "invalid_current_password");
+  }
+
+  const policy = validatePasswordPolicy(input.newPassword);
+  if (!policy.ok) {
+    throw AppError.unprocessable(policy.reason, "weak_password");
+  }
+
+  const newHash = await hashPassword(input.newPassword);
+  await db
+    .update(userLocalCredentials)
+    .set({ passwordHash: newHash, passwordUpdatedAt: new Date() })
+    .where(eq(userLocalCredentials.id, cred.id));
+
+  // 전 세션 무효화 — tokenVersion bump
+  const userRow = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const currentVersion = userRow[0]?.tokenVersion ?? 0;
+  await db.update(users).set({ tokenVersion: currentVersion + 1 }).where(eq(users.id, userId));
+
+  // 기존 refresh token 모두 revoke
+  await db
+    .update(refreshTokens)
+    .set({ revoked: true, revokedAt: new Date() })
+    .where(and(eq(refreshTokens.userId, userId), eq(refreshTokens.revoked, false)));
+}
