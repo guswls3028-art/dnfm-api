@@ -6,7 +6,7 @@ import { AppError } from "@/shared/errors/app-error.js";
  * 사이트 컨텍스트 미들웨어. 다음 우선순위로 결정:
  *   1. URL path 파라미터 (`/sites/:site/...`) — 가장 명시적
  *   2. `X-Site-Code` 헤더 — frontend client 가 명시적으로 전송
- *   3. `Origin` 헤더 추론 — `dnfm.kr` 계열 → newb, `allow.dnfm.kr` → allow
+ *   3. `Origin` 헤더 추론 — `dnfm.kr` 계열 → newb, `hurock.dnfm.kr` → hurock
  *
  * 결정된 site 는 c.set("site", ...) 로 라우트 핸들러에 전달.
  *
@@ -19,7 +19,7 @@ function inferSiteFromOrigin(origin: string | undefined): SiteCode | null {
     const url = new URL(origin);
     const host = url.hostname.toLowerCase();
     if (host === "dnfm.kr" || host === "www.dnfm.kr" || host === "localhost") return "newb";
-    if (host === "allow.dnfm.kr") return "allow";
+    if (host === "hurock.dnfm.kr") return "hurock";
     // dev: 포트로 분기
     if (host === "127.0.0.1") return "newb";
     return null;

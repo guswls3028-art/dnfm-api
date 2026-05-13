@@ -38,7 +38,7 @@ export async function getUserSiteRole(
  * 사용자의 모든 사이트별 role 반환.
  * /auth/me 응답 enrichment 에 사용 — frontend 가 admin 버튼 분기.
  *
- * 반환: [{ site: "newb"|"allow"|"*", role: "member"|"admin"|"super" }, ...]
+ * 반환: [{ site: "newb"|"hurock"|"*", role: "member"|"admin"|"super" }, ...]
  * 비어있으면 [] (member 자동 부여 정책은 별도 — 여기선 user_site_roles row 만 본다).
  */
 export async function getAllUserSiteRoles(

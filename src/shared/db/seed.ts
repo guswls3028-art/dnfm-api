@@ -69,7 +69,7 @@ const NEWB_CATEGORIES: SeedCategory[] = [
   },
 ];
 
-const ALLOW_CATEGORIES: SeedCategory[] = [
+const HUROCK_CATEGORIES: SeedCategory[] = [
   {
     slug: "talk",
     name: "잡담",
@@ -118,7 +118,7 @@ async function seedSite(site: SiteCode, cats: SeedCategory[]) {
 async function main() {
   logger.info("seeding categories…");
   await seedSite("newb", NEWB_CATEGORIES);
-  await seedSite("allow", ALLOW_CATEGORIES);
+  await seedSite("hurock", HUROCK_CATEGORIES);
   logger.info("seed complete");
   await closeDb();
 }
