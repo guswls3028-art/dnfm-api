@@ -1,3 +1,4 @@
+import { writeRateLimit } from "@/shared/http/middleware/rate-limit.js";
 import "../../shared/http/hono-env.js";
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
@@ -91,7 +92,8 @@ posts.patch(
 );
 
 /** DELETE /sites/:site/posts/:id — soft delete. */
-posts.delete("/sites/:site/posts/:id", requireAuth(), async (c) => {
+posts.delete("/sites/:site/posts/:id", 
+  writeRateLimit,requireAuth(), async (c) => {
   const site = c.get("site");
   const userId = c.get("userId");
   const id = c.req.param("id");

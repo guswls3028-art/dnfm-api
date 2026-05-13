@@ -13,6 +13,7 @@ import {
   type AuthTokens,
 } from "./service.js";
 import { env } from "@/config/env.js";
+import { authRateLimit } from "@/shared/http/middleware/rate-limit.js";
 import { ok, created } from "@/shared/http/response.js";
 import { requireAuth } from "@/shared/http/middleware/auth.js";
 import type { User } from "./schema.js";
@@ -101,7 +102,7 @@ auth.get("/check-availability", zValidator("query", checkAvailabilityQuery), asy
 });
 
 /** POST /auth/signup/local */
-auth.post("/signup/local", zValidator("json", localSignupDto), async (c) => {
+auth.post("/signup/local", authRateLimit, zValidator("json", localSignupDto), async (c) => {
   const input = c.req.valid("json");
   const result = await localSignup(input, {
     userAgent: c.req.header("user-agent") ?? undefined,
@@ -112,7 +113,7 @@ auth.post("/signup/local", zValidator("json", localSignupDto), async (c) => {
 });
 
 /** POST /auth/login/local */
-auth.post("/login/local", zValidator("json", localLoginDto), async (c) => {
+auth.post("/login/local", authRateLimit, zValidator("json", localLoginDto), async (c) => {
   const input = c.req.valid("json");
   const result = await localLogin(input, {
     userAgent: c.req.header("user-agent") ?? undefined,

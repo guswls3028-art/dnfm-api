@@ -1,3 +1,4 @@
+import { ocrRateLimit } from "@/shared/http/middleware/rate-limit.js";
 import "../../shared/http/hono-env.js";
 import { Hono, type Context } from "hono";
 import { eq } from "drizzle-orm";
@@ -454,7 +455,8 @@ function buildMockResult(type: DnfOcrCaptureType): DnfOcrResult {
 /* POST /auth/dnf-profile/ocr/:type                                           */
 /* -------------------------------------------------------------------------- */
 
-ocrRoutes.post("/ocr/:type", requireAuth(), async (c) => {
+ocrRoutes.post("/ocr/:type", 
+  ocrRateLimit,requireAuth(), async (c) => {
   const rawType = c.req.param("type");
   const parsed = dnfOcrCaptureTypeSchema.safeParse(rawType);
   if (!parsed.success) {
