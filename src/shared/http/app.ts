@@ -6,6 +6,7 @@ import { requestIdMiddleware } from "./middleware/request-id.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import { ok } from "./response.js";
 import authRoutes from "@/domains/auth/routes.js";
+import postsRoutes from "@/domains/posts/routes.js";
 
 /**
  * Hono app factory.
@@ -27,8 +28,9 @@ export function createApp() {
 
   // 도메인 mount
   app.route("/auth", authRoutes);
+  app.route("/", postsRoutes); // /sites/:site/{categories,posts,...}
 
-  // TODO Stage 2/3: /sites/:site/posts, /sites/:site/comments, /sites/:site/contests,
+  // TODO Stage 2/3: /sites/:site/comments, /sites/:site/contests,
   //                 /sites/:site/likes, /uploads, /me/profile
 
   app.notFound((c) => c.json({ error: { code: "not_found", message: "endpoint not found" } }, 404));

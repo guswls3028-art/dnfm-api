@@ -1,5 +1,5 @@
 import { pgTable, uuid, varchar, integer, timestamp, index } from "drizzle-orm/pg-core";
-import { users } from "@/domains/auth/schema.js";
+import { users } from "../auth/schema.js";
 
 /**
  * R2 업로드 메타데이터.

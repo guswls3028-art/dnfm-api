@@ -10,8 +10,8 @@ import {
   unique,
   boolean,
 } from "drizzle-orm/pg-core";
-import { users } from "@/domains/auth/schema.js";
-import { SITE_CODES } from "@/shared/types/site.js";
+import { users } from "../auth/schema.js";
+import { SITE_CODES } from "../../shared/types/site.js";
 
 /**
  * 콘테스트 ([[allow]] 핵심 기능, [[newb]] 도 향후 활용 가능).

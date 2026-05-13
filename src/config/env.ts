@@ -48,6 +48,18 @@ const envSchema = z.object({
         .filter(Boolean),
     )
     .default("newb,allow"),
+
+  // Google Cloud Vision (던파 OCR)
+  GOOGLE_APPLICATION_CREDENTIALS: z.string().optional().default(""),
+  GOOGLE_VISION_API_KEY: z.string().optional().default(""),
+
+  // OAuth (Stage 2)
+  GOOGLE_OAUTH_CLIENT_ID: z.string().optional().default(""),
+  GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional().default(""),
+  GOOGLE_OAUTH_REDIRECT_URI: z.string().optional().default(""),
+  KAKAO_OAUTH_CLIENT_ID: z.string().optional().default(""),
+  KAKAO_OAUTH_CLIENT_SECRET: z.string().optional().default(""),
+  KAKAO_OAUTH_REDIRECT_URI: z.string().optional().default(""),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

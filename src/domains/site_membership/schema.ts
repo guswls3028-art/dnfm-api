@@ -1,6 +1,6 @@
 import { pgTable, uuid, varchar, timestamp, unique, index } from "drizzle-orm/pg-core";
-import { users } from "@/domains/auth/schema.js";
-import { SITE_CODES, SITE_ROLES } from "@/shared/types/site.js";
+import { users } from "../auth/schema.js";
+import { SITE_CODES, SITE_ROLES } from "../../shared/types/site.js";
 
 /**
  * user_site_roles — 사이트별 권한.

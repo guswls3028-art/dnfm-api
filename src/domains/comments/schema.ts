@@ -1,6 +1,6 @@
 import { pgTable, uuid, text, timestamp, index } from "drizzle-orm/pg-core";
-import { users } from "@/domains/auth/schema.js";
-import { posts } from "@/domains/posts/schema.js";
+import { users } from "../auth/schema.js";
+import { posts } from "../posts/schema.js";
 
 /**
  * 댓글. flat 구조 시작. 향후 대댓글 (parentId self-ref) 추가 가능.

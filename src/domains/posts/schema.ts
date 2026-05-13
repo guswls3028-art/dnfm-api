@@ -9,8 +9,8 @@ import {
   index,
   unique,
 } from "drizzle-orm/pg-core";
-import { users } from "@/domains/auth/schema.js";
-import { SITE_CODES } from "@/shared/types/site.js";
+import { users } from "../auth/schema.js";
+import { SITE_CODES } from "../../shared/types/site.js";
 
 /**
  * 게시판 — 디시 던모갤 구조를 reference 로 (구조만 빌림, 톤은 자체).

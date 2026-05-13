@@ -1,5 +1,5 @@
 import { pgTable, uuid, varchar, timestamp, unique, index } from "drizzle-orm/pg-core";
-import { users } from "@/domains/auth/schema.js";
+import { users } from "../auth/schema.js";
 
 /**
  * 좋아요 — 다형(post / comment / contest_entry 등 무엇이든 target 가능).
