@@ -55,6 +55,14 @@ export const listPostsQuery = z.object({
     .max(64)
     .regex(/^[a-z0-9_-]+$/)
     .optional(),
+  /**
+   * 작성자 필터.
+   *   "me" — 현재 로그인 유저 본인 글만. 비로그인 시 빈 결과.
+   *   UUID — 특정 user 의 글 (공개 프로필 페이지용).
+   */
+  author: z
+    .union([z.literal("me"), z.string().uuid()])
+    .optional(),
   flair: z.string().trim().max(32).optional(),
   postType: z.enum(postTypes).optional(),
   bestOnly: z

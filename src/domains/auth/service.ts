@@ -59,6 +59,16 @@ export async function isUsernameAvailable(username: string): Promise<boolean> {
   return rows.length === 0;
 }
 
+/** user 의 local username 조회 (없으면 null — OAuth-only 계정). */
+export async function getLocalUsername(userId: string): Promise<string | null> {
+  const rows = await db
+    .select({ username: userLocalCredentials.username })
+    .from(userLocalCredentials)
+    .where(eq(userLocalCredentials.userId, userId))
+    .limit(1);
+  return rows[0]?.username ?? null;
+}
+
 /** displayName(닉네임) 중복 여부 — true 면 사용 가능. */
 export async function isDisplayNameAvailable(displayName: string): Promise<boolean> {
   const rows = await db

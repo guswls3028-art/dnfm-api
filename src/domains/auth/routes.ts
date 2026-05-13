@@ -13,6 +13,7 @@ import {
   changePassword,
   isUsernameAvailable,
   isDisplayNameAvailable,
+  getLocalUsername,
   type AuthTokens,
 } from "./service.js";
 import { env } from "@/config/env.js";
@@ -51,9 +52,10 @@ function clearAuthCookies(c: Parameters<typeof deleteCookie>[0]) {
   deleteCookie(c, "refresh_token", { domain: env.COOKIE_DOMAIN, path: "/auth" });
 }
 
-function publicUser(user: User) {
+function publicUser(user: User, username?: string | null) {
   return {
     id: user.id,
+    username: username ?? null,
     displayName: user.displayName,
     email: user.email,
     avatarR2Key: user.avatarR2Key,
@@ -113,7 +115,7 @@ auth.post("/signup/local", authRateLimit, zValidator("json", localSignupDto), as
     ipAddress: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
   });
   setAuthCookies(c, result.tokens);
-  return created(c, { user: publicUser(result.user) });
+  return created(c, { user: publicUser(result.user, input.username) });
 });
 
 /** POST /auth/login/local */
@@ -124,7 +126,7 @@ auth.post("/login/local", authRateLimit, zValidator("json", localLoginDto), asyn
     ipAddress: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
   });
   setAuthCookies(c, result.tokens);
-  return ok(c, { user: publicUser(result.user) });
+  return ok(c, { user: publicUser(result.user, input.username) });
 });
 
 /** POST /auth/logout */
@@ -144,8 +146,11 @@ auth.post("/logout", async (c) => {
  */
 auth.get("/me", requireAuth(), async (c) => {
   const user = c.get("user");
-  const siteRoles = await getAllUserSiteRoles(user.id);
-  return ok(c, { user: { ...publicUser(user), siteRoles } });
+  const [siteRoles, username] = await Promise.all([
+    getAllUserSiteRoles(user.id),
+    getLocalUsername(user.id),
+  ]);
+  return ok(c, { user: { ...publicUser(user, username), siteRoles } });
 });
 
 /**
@@ -181,8 +186,11 @@ auth.patch("/me", requireAuth(), zValidator("json", updateProfileDto), async (c)
   const user = c.get("user");
   const input = c.req.valid("json");
   const updated = await updateUserProfile(user.id, input);
-  const siteRoles = await getAllUserSiteRoles(updated.id);
-  return ok(c, { user: { ...publicUser(updated), siteRoles } });
+  const [siteRoles, username] = await Promise.all([
+    getAllUserSiteRoles(updated.id),
+    getLocalUsername(updated.id),
+  ]);
+  return ok(c, { user: { ...publicUser(updated, username), siteRoles } });
 });
 
 /**

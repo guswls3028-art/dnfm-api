@@ -88,8 +88,21 @@ export async function upsertCategory(site: SiteCode, input: CreateCategoryInput)
  * sort: recent (최신순) / best (추천수) / views (조회수)
  * BEST 만 보기 = postType=best OR pinned=true 정도. 정책 결정 필요.
  */
-export async function listPosts(site: SiteCode, query: ListPostsQuery) {
+export async function listPosts(
+  site: SiteCode,
+  query: ListPostsQuery,
+  actorId?: string,
+) {
   const filters = [eq(posts.site, site), isNull(posts.deletedAt)];
+  // author=me 는 actor 가 있어야 의미. 없으면 빈 결과.
+  if (query.author === "me") {
+    if (!actorId) {
+      return { items: [], page: query.page, pageSize: query.pageSize, total: 0 };
+    }
+    filters.push(eq(posts.authorId, actorId));
+  } else if (typeof query.author === "string") {
+    filters.push(eq(posts.authorId, query.author));
+  }
   // categoryId 우선, 없으면 categorySlug → id 해석.
   if (query.categoryId) {
     filters.push(eq(posts.categoryId, query.categoryId));

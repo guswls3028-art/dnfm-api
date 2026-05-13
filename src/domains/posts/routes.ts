@@ -64,7 +64,9 @@ posts.get(
   async (c) => {
     const site = c.get("site");
     const query = c.req.valid("query");
-    const result = await listPosts(site, query);
+    // author=me 처리용으로 optional userId 전달.
+    const actorId = c.get("userId");
+    const result = await listPosts(site, query, actorId);
     return ok(c, result);
   },
 );
