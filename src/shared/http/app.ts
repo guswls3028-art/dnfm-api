@@ -7,6 +7,10 @@ import { corsMiddleware } from "./middleware/cors.js";
 import { ok } from "./response.js";
 import authRoutes from "@/domains/auth/routes.js";
 import postsRoutes from "@/domains/posts/routes.js";
+import commentsRoutes from "@/domains/comments/routes.js";
+import likesRoutes from "@/domains/likes/routes.js";
+import uploadsRoutes from "@/domains/uploads/routes.js";
+import contestsRoutes from "@/domains/contests/routes.js";
 
 /**
  * Hono app factory.
@@ -27,11 +31,20 @@ export function createApp() {
   app.get("/readyz", (c) => ok(c, { status: "ready" }));
 
   // 도메인 mount
+  // /auth/*  (signup/login/logout/me + OAuth + dnf OCR)
   app.route("/auth", authRoutes);
-  app.route("/", postsRoutes); // /sites/:site/{categories,posts,...}
+  // /sites/:site/{categories, posts, posts/:id/{,vote}}
+  app.route("/", postsRoutes);
+  // /sites/:site/posts/:postId/comments + /sites/:site/comments/:id
+  app.route("/", commentsRoutes);
+  // /sites/:site/likes
+  app.route("/", likesRoutes);
+  // /sites/:site/contests + entries + votes + results
+  app.route("/", contestsRoutes);
+  // /uploads/presigned-put + /uploads/:id/confirm
+  app.route("/", uploadsRoutes);
 
-  // TODO Stage 2/3: /sites/:site/comments, /sites/:site/contests,
-  //                 /sites/:site/likes, /uploads, /me/profile
+  // TODO Stage 2/3: /me/profile, /admin/*
 
   app.notFound((c) => c.json({ error: { code: "not_found", message: "endpoint not found" } }, 404));
 
