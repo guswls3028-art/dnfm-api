@@ -7,10 +7,16 @@ import { getPresignedPutUrl } from "../../shared/storage/r2-client.js";
 import { env } from "../../config/env.js";
 import type { ConfirmUploadInput, CreatePresignedUrlInput } from "./dto.js";
 
-/** r2Key → 공개 URL (R2_PUBLIC_BASE 설정 시). 없으면 null. */
-export function r2KeyToPublicUrl(r2Key: string): string | null {
-  if (!env.R2_PUBLIC_BASE) return null;
-  return `${env.R2_PUBLIC_BASE.replace(/\/+$/, "")}/${r2Key}`;
+/**
+ * r2Key → 공개 URL.
+ *   - R2_PUBLIC_BASE 설정 시 그 도메인 직접 사용 (CF R2 public dev URL or 커스텀 도메인).
+ *   - 미설정 시 api 의 /uploads/r2/<key> proxy 경로 사용 (presigned GET redirect).
+ */
+export function r2KeyToPublicUrl(r2Key: string): string {
+  if (env.R2_PUBLIC_BASE) {
+    return `${env.R2_PUBLIC_BASE.replace(/\/+$/, "")}/${r2Key}`;
+  }
+  return `https://api.dnfm.kr/uploads/r2/${encodeURIComponent(r2Key)}`;
 }
 
 /**
@@ -30,7 +36,7 @@ function buildR2Key(purpose: string, userId: string): string {
 export async function createPresignedPut(
   ownerId: string,
   input: CreatePresignedUrlInput,
-): Promise<{ uploadId: string; putUrl: string; r2Key: string; publicUrl: string | null }> {
+): Promise<{ uploadId: string; putUrl: string; r2Key: string; publicUrl: string }> {
   const r2Key = buildR2Key(input.purpose, ownerId);
 
   // DB row 먼저 생성 — 실패 시 R2 호출 안 함

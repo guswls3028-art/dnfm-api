@@ -8,6 +8,7 @@ import { confirmUploadDto, createPresignedUrlDto } from "./dto.js";
 import { confirmUpload, createPresignedPut } from "./service.js";
 import { hasAnyAdminRole } from "../../shared/auth/permissions.js";
 import { AppError } from "../../shared/errors/app-error.js";
+import { getPresignedGetUrl } from "../../shared/storage/r2-client.js";
 
 const uploads = new Hono();
 
@@ -50,5 +51,20 @@ uploads.post(
     return ok(c, { upload });
   },
 );
+
+/**
+ * GET /uploads/r2/* — R2 객체를 사용자 브라우저에 노출.
+ * R2_PUBLIC_BASE 가 설정 안 됐을 때의 fallback: 302 redirect → presigned GET URL.
+ * presigned URL 은 짧은 TTL 이라 브라우저가 따라가는 즉시 만료되어도 OK.
+ */
+uploads.get("/uploads/r2/*", async (c) => {
+  const fullPath = c.req.path; // "/uploads/r2/<key...>"
+  const key = decodeURIComponent(fullPath.replace(/^\/uploads\/r2\//, ""));
+  if (!key) {
+    throw AppError.notFound("키가 없습니다.", "missing_key");
+  }
+  const presigned = await getPresignedGetUrl(key, 3600);
+  return c.redirect(presigned, 302);
+});
 
 export default uploads;
