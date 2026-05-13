@@ -5,10 +5,11 @@ import { requireAuth } from "../../shared/http/middleware/auth.js";
 import { created, ok } from "../../shared/http/response.js";
 import { requireUuid } from "../../shared/validation/uuid.js";
 import { confirmUploadDto, createPresignedUrlDto } from "./dto.js";
-import { confirmUpload, createPresignedPut } from "./service.js";
+import { confirmUpload, createPresignedPut, uploadFileDirect } from "./service.js";
 import { hasAnyAdminRole } from "../../shared/auth/permissions.js";
 import { AppError } from "../../shared/errors/app-error.js";
 import { getPresignedGetUrl } from "../../shared/storage/r2-client.js";
+import { uploadPurposes } from "./dto.js";
 
 const uploads = new Hono();
 
@@ -51,6 +52,48 @@ uploads.post(
     return ok(c, { upload });
   },
 );
+
+/**
+ * POST /uploads/file — multipart 직접 업로드.
+ * presigned PUT 대신 backend 가 R2 에 PUT 해 CORS 회피.
+ * form fields:
+ *   - file: File
+ *   - purpose: "hero_banner" | ... (from uploadPurposes)
+ */
+uploads.post("/uploads/file", requireAuth(), async (c) => {
+  const userId = c.get("userId");
+  const form = await c.req.formData();
+  const file = form.get("file");
+  const purposeRaw = String(form.get("purpose") || "");
+
+  if (!(file instanceof File)) {
+    throw AppError.badRequest("file 필드가 없거나 형식이 아닙니다.", "missing_file");
+  }
+  if (!uploadPurposes.includes(purposeRaw as (typeof uploadPurposes)[number])) {
+    throw AppError.badRequest("purpose 가 올바르지 않습니다.", "invalid_purpose");
+  }
+  const purpose = purposeRaw as (typeof uploadPurposes)[number];
+
+  if (purpose === "hero_banner") {
+    const allowed = await hasAnyAdminRole(userId);
+    if (!allowed) {
+      throw AppError.forbidden("운영자 권한이 필요합니다.", "admin_required");
+    }
+  }
+
+  if (file.size > 10 * 1024 * 1024) {
+    throw AppError.badRequest("10MB 이하 파일만 가능합니다.", "file_too_large");
+  }
+
+  const buf = Buffer.from(await file.arrayBuffer());
+  const result = await uploadFileDirect(userId, {
+    purpose,
+    contentType: file.type || "application/octet-stream",
+    sizeBytes: file.size,
+    body: buf,
+  });
+  return created(c, result);
+});
 
 /**
  * GET /uploads/r2/* — R2 객체를 사용자 브라우저에 노출.

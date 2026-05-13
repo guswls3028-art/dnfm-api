@@ -455,8 +455,10 @@ function buildMockResult(type: DnfOcrCaptureType): DnfOcrResult {
 /* POST /auth/dnf-profile/ocr/:type                                           */
 /* -------------------------------------------------------------------------- */
 
-ocrRoutes.post("/ocr/:type", 
-  ocrRateLimit,requireAuth(), async (c) => {
+// 가입 흐름(아직 cookie 없는 시점)에서도 호출 — requireAuth 제거.
+// 결과는 DB 에 저장 안 함 (분석만 반환). rate limit 으로 abuse 차단.
+ocrRoutes.post("/ocr/:type",
+  ocrRateLimit, async (c) => {
   const rawType = c.req.param("type");
   const parsed = dnfOcrCaptureTypeSchema.safeParse(rawType);
   if (!parsed.success) {
