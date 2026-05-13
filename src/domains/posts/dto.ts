@@ -4,7 +4,12 @@ import { postTypes, postVoteTypes } from "./schema.js";
 
 /** 카테고리 생성 (어드민). */
 export const createCategoryDto = z.object({
-  slug: z.string().trim().min(1).max(64).regex(/^[a-z0-9-]+$/),
+  slug: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9-]+$/),
   name: z.string().trim().min(1).max(64),
   description: z.string().trim().max(500).optional(),
   sortOrder: z.number().int().default(0),
@@ -14,7 +19,7 @@ export const createCategoryDto = z.object({
 });
 export type CreateCategoryInput = z.infer<typeof createCategoryDto>;
 
-/** 글 생성. */
+/** 글 생성. 회원이면 인증으로, 비회원이면 guest 필드로. */
 export const createPostDto = z.object({
   categoryId: z.string().uuid().optional(),
   // categoryId 대체 — slug 도 허용. 둘 다 오면 categoryId 우선.
@@ -30,10 +35,13 @@ export const createPostDto = z.object({
   flair: z.string().trim().max(32).optional(),
   postType: z.enum(postTypes).optional(), // 보통 normal. notice/ad 는 admin only.
   attachmentR2Keys: z.array(z.string().max(512)).max(20).default([]),
+  // 비회원 작성용 (디시 스타일). 회원 인증 있으면 무시.
+  guestNickname: z.string().trim().min(1).max(32).optional(),
+  guestPassword: z.string().min(4).max(128).optional(),
 });
 export type CreatePostInput = z.infer<typeof createPostDto>;
 
-/** 글 수정. */
+/** 글 수정. 비회원이면 guestPassword 로 본인 검증. */
 export const updatePostDto = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   body: z.string().trim().min(1).max(50_000).optional(),
@@ -41,8 +49,15 @@ export const updatePostDto = z.object({
   flair: z.string().trim().max(32).optional().nullable(),
   pinned: z.boolean().optional(), // admin only
   locked: z.boolean().optional(), // admin only
+  guestPassword: z.string().min(1).max(128).optional(), // 비회원 본인 검증용
 });
 export type UpdatePostInput = z.infer<typeof updatePostDto>;
+
+/** 글 삭제 (비회원 본인 검증용). */
+export const deletePostDto = z.object({
+  guestPassword: z.string().min(1).max(128).optional(),
+});
+export type DeletePostInput = z.infer<typeof deletePostDto>;
 
 /** 글 list 쿼리. */
 export const listPostsQuery = z.object({
@@ -60,9 +75,7 @@ export const listPostsQuery = z.object({
    *   "me" — 현재 로그인 유저 본인 글만. 비로그인 시 빈 결과.
    *   UUID — 특정 user 의 글 (공개 프로필 페이지용).
    */
-  author: z
-    .union([z.literal("me"), z.string().uuid()])
-    .optional(),
+  author: z.union([z.literal("me"), z.string().uuid()]).optional(),
   flair: z.string().trim().max(32).optional(),
   postType: z.enum(postTypes).optional(),
   bestOnly: z

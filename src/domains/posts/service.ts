@@ -1,14 +1,25 @@
-import { and, eq, desc, sql, count, isNull, ilike, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, isNull, or, sql } from "drizzle-orm";
+import {
+  buildAnonymousAuditHash,
+  buildAnonymousMarker,
+  sanitizeGuestNickname,
+} from "../../shared/anonymous/anonymous.js";
+import { hashPassword, verifyPassword } from "../../shared/crypto/password.js";
 import { db } from "../../shared/db/client.js";
-import { posts, postCategories, postVotes, type PostVoteType } from "./schema.js";
 import { AppError } from "../../shared/errors/app-error.js";
 import type { SiteCode } from "../../shared/types/site.js";
 import type {
-  CreatePostInput,
-  UpdatePostInput,
-  ListPostsQuery,
   CreateCategoryInput,
+  CreatePostInput,
+  ListPostsQuery,
+  UpdatePostInput,
 } from "./dto.js";
+import { type PostVoteType, postCategories, postVotes, posts } from "./schema.js";
+
+export type RequestContext = {
+  ipAddress?: string;
+  userAgent?: string;
+};
 
 /**
  * post + category 조인 결과 — frontend UI 가 category.name / slug 직접 표시.
@@ -103,11 +114,7 @@ export async function upsertCategory(site: SiteCode, input: CreateCategoryInput)
  * sort: recent (최신순) / best (추천수) / views (조회수)
  * BEST 만 보기 = postType=best OR pinned=true 정도. 정책 결정 필요.
  */
-export async function listPosts(
-  site: SiteCode,
-  query: ListPostsQuery,
-  actorId?: string,
-) {
+export async function listPosts(site: SiteCode, query: ListPostsQuery, actorId?: string) {
   const filters = [eq(posts.site, site), isNull(posts.deletedAt)];
   // author=me 는 actor 가 있어야 의미. 없으면 빈 결과.
   if (query.author === "me") {
@@ -125,9 +132,7 @@ export async function listPosts(
     const catRows = await db
       .select({ id: postCategories.id })
       .from(postCategories)
-      .where(
-        and(eq(postCategories.site, site), eq(postCategories.slug, query.categorySlug)),
-      )
+      .where(and(eq(postCategories.site, site), eq(postCategories.slug, query.categorySlug)))
       .limit(1);
     const catId = catRows[0]?.id;
     if (!catId) {
@@ -220,30 +225,45 @@ async function validateCategoryAndFlair(
   const cat = await getCategoryById(site, categoryId);
   if (!cat) throw AppError.badRequest("카테고리를 찾을 수 없습니다.", "category_not_found");
   if (flair && cat.flairs.length > 0 && !cat.flairs.includes(flair)) {
-    throw AppError.badRequest(
-      "이 카테고리에서 허용되지 않는 말머리입니다.",
-      "invalid_flair",
-      { allowed: cat.flairs },
-    );
+    throw AppError.badRequest("이 카테고리에서 허용되지 않는 말머리입니다.", "invalid_flair", {
+      allowed: cat.flairs,
+    });
   }
   return cat;
 }
 
-/** 글 작성 — 회원 글. (익명 글은 별도 함수 / Stage 후속) */
+/**
+ * 글 작성. 회원이면 `authorId`, 비회원이면 `guestNickname` + `guestPassword`.
+ * 비회원 작성 시 IP 끝자리 marker + audit hash 저장 (디시 스타일).
+ */
 export async function createPost(
   site: SiteCode,
-  authorId: string,
+  authorId: string | null,
   input: CreatePostInput,
+  ctx: RequestContext = {},
 ) {
+  // 회원 / 비회원 분기
+  const isGuest = !authorId;
+  let guestPasswordHash: string | null = null;
+  let guestNickname: string | null = null;
+  let anonymousMarker: string | null = null;
+  let anonymousAuditHash: string | null = null;
+  if (isGuest) {
+    guestNickname = sanitizeGuestNickname(input.guestNickname);
+    if (input.guestPassword) {
+      guestPasswordHash = await hashPassword(input.guestPassword);
+    }
+    anonymousMarker = buildAnonymousMarker(ctx.ipAddress);
+    anonymousAuditHash = buildAnonymousAuditHash(ctx.ipAddress, ctx.userAgent);
+  }
+
   // categoryId 우선, 없으면 slug 해석.
   let resolvedCategoryId = input.categoryId;
   if (!resolvedCategoryId && input.categorySlug) {
     const catRows = await db
       .select({ id: postCategories.id })
       .from(postCategories)
-      .where(
-        and(eq(postCategories.site, site), eq(postCategories.slug, input.categorySlug)),
-      )
+      .where(and(eq(postCategories.site, site), eq(postCategories.slug, input.categorySlug)))
       .limit(1);
     if (!catRows[0]) {
       throw AppError.badRequest("카테고리를 찾을 수 없습니다.", "category_not_found", {
@@ -253,7 +273,17 @@ export async function createPost(
     resolvedCategoryId = catRows[0].id;
   }
 
-  await validateCategoryAndFlair(site, resolvedCategoryId, input.flair);
+  const cat = await validateCategoryAndFlair(site, resolvedCategoryId, input.flair);
+
+  // 카테고리 자체가 비회원 작성을 허용하는지 검증.
+  if (isGuest) {
+    if (!cat) {
+      throw AppError.badRequest("카테고리를 지정해주세요.", "category_required");
+    }
+    if (cat.writeRoleMin !== "anonymous") {
+      throw AppError.forbidden("이 카테고리는 회원만 작성할 수 있습니다.", "member_required");
+    }
+  }
 
   // notice/ad/best 는 일반 회원 작성 금지 (admin 만 — route 단에서 권한 분기)
   const postType = input.postType ?? "normal";
@@ -267,6 +297,10 @@ export async function createPost(
       site,
       categoryId: resolvedCategoryId,
       authorId,
+      authorNickname: guestNickname,
+      authorPasswordHash: guestPasswordHash,
+      anonymousMarker,
+      anonymousAuditHash,
       title: input.title,
       body: input.body,
       bodyFormat: input.bodyFormat,
@@ -278,17 +312,43 @@ export async function createPost(
   return inserted[0]!;
 }
 
-/** 글 수정 — 작성자 본인 또는 admin. */
+/**
+ * 비회원 수정/삭제 권한 검증.
+ * - 회원이면 authorId 일치만 검증.
+ * - 비회원이면 guestPassword 가 저장된 hash 와 일치해야 함.
+ * - hash 가 null 인 비회원 글은 본인 수정/삭제 불가 (어드민만).
+ */
+async function verifyAuthorPermission(
+  post: { authorId: string | null; authorPasswordHash: string | null },
+  actorId: string | null,
+  guestPassword: string | undefined,
+  isAdmin: boolean,
+): Promise<boolean> {
+  if (isAdmin) return true;
+  if (post.authorId) {
+    // 회원 글 — 본인만 가능
+    return Boolean(actorId) && post.authorId === actorId;
+  }
+  // 비회원 글 — guestPassword 매칭만 가능
+  if (!post.authorPasswordHash || !guestPassword) return false;
+  return verifyPassword(guestPassword, post.authorPasswordHash);
+}
+
+/**
+ * 글 수정 — 회원 본인 / 비회원 비번 일치 / admin.
+ * 비회원이면 input.guestPassword 가 저장된 hash 와 일치해야 함.
+ */
 export async function updatePost(
   site: SiteCode,
   postId: string,
-  actorId: string,
+  actorId: string | null,
   isAdmin: boolean,
   input: UpdatePostInput,
 ) {
   const existing = await getPostById(site, postId);
-  if (existing.authorId !== actorId && !isAdmin) {
-    throw AppError.forbidden("본인 글만 수정할 수 있습니다.", "not_author");
+  const allowed = await verifyAuthorPermission(existing, actorId, input.guestPassword, isAdmin);
+  if (!allowed) {
+    throw AppError.forbidden("수정 권한이 없습니다.", "not_author");
   }
 
   // pinned / locked 는 admin 만
@@ -312,21 +372,22 @@ export async function updatePost(
   return updated[0]!;
 }
 
-/** soft delete — 작성자 본인 또는 admin. */
+/**
+ * soft delete — 회원 본인 / 비회원 비번 일치 / admin.
+ */
 export async function deletePost(
   site: SiteCode,
   postId: string,
-  actorId: string,
+  actorId: string | null,
   isAdmin: boolean,
+  guestPassword?: string,
 ): Promise<void> {
   const existing = await getPostById(site, postId);
-  if (existing.authorId !== actorId && !isAdmin) {
-    throw AppError.forbidden("본인 글만 삭제할 수 있습니다.", "not_author");
+  const allowed = await verifyAuthorPermission(existing, actorId, guestPassword, isAdmin);
+  if (!allowed) {
+    throw AppError.forbidden("삭제 권한이 없습니다.", "not_author");
   }
-  await db
-    .update(posts)
-    .set({ deletedAt: new Date() })
-    .where(eq(posts.id, postId));
+  await db.update(posts).set({ deletedAt: new Date() }).where(eq(posts.id, postId));
 }
 
 /**
@@ -412,10 +473,7 @@ export async function votePost(
     // BEST 자동 승격 — 추천 임계치 도달 + 아직 best 아닌 경우.
     const after = await tx.select().from(posts).where(eq(posts.id, postId)).limit(1);
     const cur = after[0]!;
-    if (
-      cur.recommendCount >= BEST_RECOMMEND_THRESHOLD &&
-      cur.postType === "normal"
-    ) {
+    if (cur.recommendCount >= BEST_RECOMMEND_THRESHOLD && cur.postType === "normal") {
       await tx
         .update(posts)
         .set({ postType: "best", promotedAt: new Date() })

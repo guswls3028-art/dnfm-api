@@ -4,6 +4,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { isSiteAdmin } from "../../shared/auth/permissions.js";
 import { AppError } from "../../shared/errors/app-error.js";
+import { getClientIp, getUserAgent } from "../../shared/http/client-ip.js";
 import { optionalAuth, requireAuth } from "../../shared/http/middleware/auth.js";
 import { siteFromParam } from "../../shared/http/middleware/site.js";
 import { created, ok } from "../../shared/http/response.js";
@@ -11,6 +12,7 @@ import { requireUuid } from "../../shared/validation/uuid.js";
 import {
   createCategoryDto,
   createPostDto,
+  deletePostDto,
   listPostsQuery,
   siteParam,
   updatePostDto,
@@ -77,40 +79,59 @@ posts.get("/sites/:site/posts/:id", optionalAuth(), async (c) => {
   return ok(c, { post });
 });
 
-/** POST /sites/:site/posts — 글 작성 (회원). */
-posts.post("/sites/:site/posts", requireAuth(), zValidator("json", createPostDto), async (c) => {
-  const site = c.get("site");
-  const userId = c.get("userId");
-  const input = c.req.valid("json");
-  const post = await createPost(site, userId, input);
-  return created(c, { post });
-});
+/**
+ * POST /sites/:site/posts — 글 작성. 회원이면 인증, 비회원이면 guest 필드.
+ * 카테고리의 writeRoleMin = "anonymous" 인 경우에만 비회원 허용.
+ */
+posts.post(
+  "/sites/:site/posts",
+  writeRateLimit,
+  optionalAuth(),
+  zValidator("json", createPostDto),
+  async (c) => {
+    const site = c.get("site");
+    const userId = c.get("userId") || null;
+    const input = c.req.valid("json");
+    const post = await createPost(site, userId, input, {
+      ipAddress: getClientIp(c),
+      userAgent: getUserAgent(c),
+    });
+    return created(c, { post });
+  },
+);
 
-/** PATCH /sites/:site/posts/:id — 글 수정 (작성자 or 어드민). */
+/** PATCH /sites/:site/posts/:id — 글 수정. 회원 본인 / 비회원 비번 일치 / admin. */
 posts.patch(
   "/sites/:site/posts/:id",
-  requireAuth(),
+  optionalAuth(),
   zValidator("json", updatePostDto),
   async (c) => {
     const site = c.get("site");
-    const userId = c.get("userId");
+    const userId = c.get("userId") || null;
     const id = requireUuid(c.req.param("id"), "post_not_found");
     const input = c.req.valid("json");
-    const isAdmin = await isSiteAdmin(site, userId);
+    const isAdmin = userId ? await isSiteAdmin(site, userId) : false;
     const post = await updatePost(site, id, userId, isAdmin, input);
     return ok(c, { post });
   },
 );
 
-/** DELETE /sites/:site/posts/:id — soft delete. */
-posts.delete("/sites/:site/posts/:id", writeRateLimit, requireAuth(), async (c) => {
-  const site = c.get("site");
-  const userId = c.get("userId");
-  const id = requireUuid(c.req.param("id"), "post_not_found");
-  const isAdmin = await isSiteAdmin(site, userId);
-  await deletePost(site, id, userId, isAdmin);
-  return ok(c, { ok: true });
-});
+/** DELETE /sites/:site/posts/:id — soft delete. 회원/비회원 모두. body 의 guestPassword 검증. */
+posts.delete(
+  "/sites/:site/posts/:id",
+  writeRateLimit,
+  optionalAuth(),
+  zValidator("json", deletePostDto),
+  async (c) => {
+    const site = c.get("site");
+    const userId = c.get("userId") || null;
+    const id = requireUuid(c.req.param("id"), "post_not_found");
+    const input = c.req.valid("json");
+    const isAdmin = userId ? await isSiteAdmin(site, userId) : false;
+    await deletePost(site, id, userId, isAdmin, input.guestPassword);
+    return ok(c, { ok: true });
+  },
+);
 
 /** POST /sites/:site/posts/:id/vote — 추천/비추천 토글. */
 posts.post(
