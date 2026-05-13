@@ -35,6 +35,23 @@ export async function getUserSiteRole(
 }
 
 /**
+ * 사용자의 모든 사이트별 role 반환.
+ * /auth/me 응답 enrichment 에 사용 — frontend 가 admin 버튼 분기.
+ *
+ * 반환: [{ site: "newb"|"allow"|"*", role: "member"|"admin"|"super" }, ...]
+ * 비어있으면 [] (member 자동 부여 정책은 별도 — 여기선 user_site_roles row 만 본다).
+ */
+export async function getAllUserSiteRoles(
+  userId: string,
+): Promise<Array<{ site: SiteCode | "*"; role: SiteRole }>> {
+  const rows = await db
+    .select({ site: userSiteRoles.site, role: userSiteRoles.role })
+    .from(userSiteRoles)
+    .where(eq(userSiteRoles.userId, userId));
+  return rows as Array<{ site: SiteCode | "*"; role: SiteRole }>;
+}
+
+/**
  * site 의 admin 또는 super 권한 보유 검사.
  * posts/contests 의 update/delete/pinned/admin-only endpoint 에서 사용.
  */

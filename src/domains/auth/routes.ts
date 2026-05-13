@@ -16,6 +16,7 @@ import { env } from "@/config/env.js";
 import { authRateLimit } from "@/shared/http/middleware/rate-limit.js";
 import { ok, created } from "@/shared/http/response.js";
 import { requireAuth } from "@/shared/http/middleware/auth.js";
+import { getAllUserSiteRoles } from "@/shared/auth/permissions.js";
 import type { User } from "./schema.js";
 import ocrRoutes from "./ocr-routes.js";
 import oauthRoutes from "./oauth-routes.js";
@@ -131,10 +132,17 @@ auth.post("/logout", async (c) => {
   return ok(c, { ok: true });
 });
 
-/** GET /auth/me — 현재 로그인 유저 정보. */
+/**
+ * GET /auth/me — 현재 로그인 유저 정보 + 사이트별 role.
+ *
+ * siteRoles: [{ site, role }] — frontend 가 admin 버튼 분기에 사용.
+ *   site = "*" 인 row 는 super (모든 사이트의 admin 권한).
+ *   row 가 없는 사이트는 일반 member 로 간주.
+ */
 auth.get("/me", requireAuth(), async (c) => {
   const user = c.get("user");
-  return ok(c, { user: publicUser(user) });
+  const siteRoles = await getAllUserSiteRoles(user.id);
+  return ok(c, { user: { ...publicUser(user), siteRoles } });
 });
 
 /**
