@@ -49,7 +49,27 @@ export async function issueTokens(
   return { accessToken, refreshToken, accessExpiresAt, refreshExpiresAt };
 }
 
-/** 자체 가입 — username 중복 검사 → users + user_local_credentials insert → 자동 로그인. */
+/** username 중복 여부 — true 면 사용 가능. */
+export async function isUsernameAvailable(username: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: userLocalCredentials.id })
+    .from(userLocalCredentials)
+    .where(eq(userLocalCredentials.username, username))
+    .limit(1);
+  return rows.length === 0;
+}
+
+/** displayName(닉네임) 중복 여부 — true 면 사용 가능. */
+export async function isDisplayNameAvailable(displayName: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.displayName, displayName))
+    .limit(1);
+  return rows.length === 0;
+}
+
+/** 자체 가입 — username + displayName 중복 검사 → users + user_local_credentials insert → 자동 로그인. */
 export async function localSignup(
   input: LocalSignupInput,
   meta: { userAgent?: string; ipAddress?: string },
@@ -59,13 +79,22 @@ export async function localSignup(
     throw AppError.unprocessable(passwordCheck.reason, "weak_password");
   }
 
-  const existing = await db
+  const existingUsername = await db
     .select({ id: userLocalCredentials.id })
     .from(userLocalCredentials)
     .where(eq(userLocalCredentials.username, input.username))
     .limit(1);
-  if (existing.length > 0) {
+  if (existingUsername.length > 0) {
     throw AppError.conflict("이미 사용 중인 아이디입니다.", "username_taken");
+  }
+
+  const existingDisplayName = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.displayName, input.displayName))
+    .limit(1);
+  if (existingDisplayName.length > 0) {
+    throw AppError.conflict("이미 사용 중인 닉네임입니다.", "display_name_taken");
   }
 
   const passwordHash = await hashPassword(input.password);

@@ -59,6 +59,9 @@ export const users = pgTable(
  */
 export interface DnfProfile {
   adventurerName?: string; // 모험단명 (예: "광기의 파도")
+  // 대표 캐릭터명 — basic_info 캡처에서 모험단명과 같이 추출.
+  // 본인 인증 + 콘테스트 prefill 시 default 캐릭으로 사용.
+  mainCharacterName?: string;
   characters?: Array<{
     name: string; // 캐릭터명 (예: "지금간다")
     klass: string; // 직업 (예: "오버마인드") — class 는 JS 예약어라 klass

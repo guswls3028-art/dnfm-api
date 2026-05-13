@@ -101,6 +101,8 @@ async function callGemini(
     return {
       type,
       adventurerName: (parsed.adventurerName as string | undefined)?.trim() || undefined,
+      mainCharacterName:
+        (parsed.mainCharacterName as string | undefined)?.trim() || undefined,
       raw: rawJson,
     };
   }
@@ -132,8 +134,12 @@ function geminiPromptFor(type: DnfOcrCaptureType): string {
   if (type === "basic_info") {
     return (
       "이 이미지는 던전앤파이터 모바일 의 '모험단 기본정보' 화면이다." +
-      " 화면 안에 있는 '모험단명' 한국어 텍스트만 정확히 추출해라." +
-      " 캐릭터명·레벨·항마력·서버명은 무시. 모험단명만."
+      " 두 가지를 정확히 추출해라:" +
+      " (1) adventurerName — '모험단명' 한국어 텍스트 (예: '광기의 파도')." +
+      " (2) mainCharacterName — 대표 캐릭터 이름. 모험단명 옆/아래에 표시되는" +
+      " 대표 캐릭터 (보통 가장 큰 글자 또는 '대표' 라벨 옆) 의 캐릭터명 한 개." +
+      " 레벨·항마력·서버명·UI 라벨(예: 정보, 모험단, 기본정보) 은 둘 다 제외." +
+      " 정확히 찾을 수 없으면 빈 문자열."
     );
   }
   if (type === "character_list") {
@@ -156,8 +162,11 @@ function geminiSchemaFor(type: DnfOcrCaptureType): unknown {
   if (type === "basic_info") {
     return {
       type: "object",
-      properties: { adventurerName: { type: "string" } },
-      required: ["adventurerName"],
+      properties: {
+        adventurerName: { type: "string" },
+        mainCharacterName: { type: "string" },
+      },
+      required: ["adventurerName", "mainCharacterName"],
     };
   }
   if (type === "character_list") {
@@ -283,12 +292,18 @@ async function runVision(buffer: Buffer): Promise<VisionTextResult> {
 /* -------------------------------------------------------------------------- */
 
 /**
- * basic_info — 모험단명 추출.
- *   휴리스틱: bounding box 높이가 가장 큰 텍스트 블록 (제목 텍스트가 보통 가장 큼).
- *   fallback: fullText 라인 중 한글 2~16자 라인 첫 줄.
+ * basic_info — 모험단명 + 대표 캐릭터명 추출.
+ *   휴리스틱: bounding box 높이로 텍스트 블록 정렬.
+ *     - 가장 큰 한글 텍스트 = 모험단명 후보 (제목)
+ *     - 그 다음 큰 한글 텍스트 = 대표 캐릭터명 후보 (모험단명 옆/아래 표시)
+ *   fallback: fullText 라인 중 한글 2~16자 라인 순서대로.
+ *   레벨/항마력/UI 라벨/숫자만은 제외.
  */
-function extractAdventurerName(v: VisionTextResult): string | undefined {
-  // bounding box height 로 정렬 — 가장 큰 텍스트가 모험단명일 가능성 높음.
+function extractBasicInfo(v: VisionTextResult): {
+  adventurerName?: string;
+  mainCharacterName?: string;
+} {
+  const NOISE_LABELS = /^(레벨|항마력|모험단|기본정보|정보|모험가|보유캐릭터|능력치|대표|LV|Lv)$/;
   const sized = v.blocks
     .map((b) => {
       const ys = b.vertices.map((p) => p.y);
@@ -297,17 +312,38 @@ function extractAdventurerName(v: VisionTextResult): string | undefined {
     })
     .filter((b) => b.text.length >= 2 && b.text.length <= 16)
     .filter((b) => /[가-힣A-Za-z]/.test(b.text))
-    .filter((b) => !/^(레벨|항마력|모험단|기본정보|정보|모험가)$/.test(b.text))
+    .filter((b) => !NOISE_LABELS.test(b.text))
+    .filter((b) => !/^[\s\d,.]+$/.test(b.text))
     .sort((a, b) => b.height - a.height);
-  if (sized[0]) return sized[0].text;
 
-  for (const line of v.fullText.split(/\r?\n/)) {
-    const t = line.trim();
-    if (t.length >= 2 && t.length <= 16 && /[가-힣]/.test(t) && !/^\d+$/.test(t)) {
-      return t;
-    }
+  // de-dup by text — 같은 글자 box 가 여러 개 (글자별 분할) 들어올 수 있음.
+  const seen = new Set<string>();
+  const dedup: typeof sized = [];
+  for (const s of sized) {
+    if (seen.has(s.text)) continue;
+    seen.add(s.text);
+    dedup.push(s);
   }
-  return undefined;
+
+  const adventurerName = dedup[0]?.text;
+  const mainCharacterName = dedup[1]?.text;
+
+  if (adventurerName) {
+    return { adventurerName, mainCharacterName };
+  }
+
+  // box 가 비어있으면 fullText 라인 fallback — 한글 라인 순서대로.
+  const lines = v.fullText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((t) => t.length >= 2 && t.length <= 16)
+    .filter((t) => /[가-힣]/.test(t))
+    .filter((t) => !/^\d+$/.test(t))
+    .filter((t) => !NOISE_LABELS.test(t));
+  return {
+    adventurerName: lines[0],
+    mainCharacterName: lines[1],
+  };
 }
 
 const NOISE_LINE = /^(레벨|항마력|모험가|보유캐릭터|캐릭터|능력치|LV|Lv)/i;
@@ -393,6 +429,7 @@ function buildMockResult(type: DnfOcrCaptureType): DnfOcrResult {
     return {
       type,
       adventurerName: "광기의 파도",
+      mainCharacterName: "지금간다",
       raw: "[MOCK] Vision 미설정 — 실제 캡처에서는 자동 추출됩니다.",
     };
   }
@@ -461,9 +498,11 @@ ocrRoutes.post("/ocr/:type", requireAuth(), async (c) => {
 
   let result: DnfOcrResult;
   if (type === "basic_info") {
+    const basic = extractBasicInfo(visionResult);
     result = {
       type,
-      adventurerName: extractAdventurerName(visionResult),
+      adventurerName: basic.adventurerName,
+      mainCharacterName: basic.mainCharacterName,
       raw: visionResult.fullText,
     };
   } else if (type === "character_list") {
@@ -489,6 +528,7 @@ ocrRoutes.post("/ocr/:type", requireAuth(), async (c) => {
 /** 사용자 확정 dto — 본인이 OCR 결과를 수기 보정 후 저장. */
 const confirmDto = z.object({
   adventurerName: z.string().trim().min(1).max(32).optional(),
+  mainCharacterName: z.string().trim().min(1).max(32).optional(),
   characters: z
     .array(
       z.object({
@@ -535,6 +575,9 @@ ocrRoutes.post("/confirm", requireAuth(), zValidator("json", confirmDto), async 
   const nextProfile: DnfProfile = {
     ...(user.dnfProfile ?? {}),
     ...(input.adventurerName !== undefined && { adventurerName: input.adventurerName }),
+    ...(input.mainCharacterName !== undefined && {
+      mainCharacterName: input.mainCharacterName,
+    }),
     ...(input.characters !== undefined && { characters: input.characters }),
     verifiedBySelectScreen: verified,
     confirmedAt: new Date().toISOString(),
@@ -549,6 +592,7 @@ ocrRoutes.post("/confirm", requireAuth(), zValidator("json", confirmDto), async 
   // dnfProfile 자체 shape validation (defense-in-depth)
   const profileShape = dnfProfileSchema.partial().safeParse({
     adventurerName: nextProfile.adventurerName,
+    mainCharacterName: nextProfile.mainCharacterName,
     characters: nextProfile.characters,
   });
   if (!profileShape.success) {

@@ -30,30 +30,27 @@ import { ok, created } from "../../shared/http/response.js";
 import { requireAuth, optionalAuth } from "../../shared/http/middleware/auth.js";
 import { siteFromParam } from "../../shared/http/middleware/site.js";
 import { AppError } from "../../shared/errors/app-error.js";
+import { isSiteAdmin } from "../../shared/auth/permissions.js";
+import type { SiteCode } from "../../shared/types/site.js";
 
 const contests = new Hono();
 
 contests.use("/sites/:site/*", siteFromParam());
 
 /**
- * isAdmin 결정 — site_membership 조회 미구현. Stage 2 에서 user_site_roles
- * lookup 으로 교체. 지금은 false 로 두되, admin-only 라우트는 TODO 마커 + 401.
+ * isAdmin 결정 — user_site_roles 조회.
+ *   role IN ('admin','super') 또는 site='*' 의 admin/super row 면 true.
  *
- * 현 시점 정책:
+ * 정책:
  *   - 콘테스트 생성/수정/삭제/후보선정/결과발표 = admin only → 모두 isAdmin 체크
  *   - 그 외 (list/get/entry 작성/투표/결과 조회) = 로그인 회원 or 공개
  */
-async function resolveIsAdmin(_site: string, _userId: string): Promise<boolean> {
-  // TODO Stage 2: SELECT role FROM user_site_roles WHERE site=$1 AND user_id=$2
-  // role IN ('admin','super') 이면 true. 현재는 모두 false.
-  return false;
+async function resolveIsAdmin(site: SiteCode, userId: string): Promise<boolean> {
+  return isSiteAdmin(site, userId);
 }
 
 function requireAdmin(): never {
-  throw AppError.forbidden(
-    "운영자 권한이 필요합니다. (site_membership 미구현 단계)",
-    "admin_required",
-  );
+  throw AppError.forbidden("운영자 권한이 필요합니다.", "admin_required");
 }
 
 /* -------------------------------------------------------------------------- */

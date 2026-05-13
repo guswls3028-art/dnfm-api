@@ -29,6 +29,8 @@ export const dnfOcrCaptureTypeSchema = z.enum(dnfOcrCaptureTypes);
 export interface DnfOcrResult {
   type: DnfOcrCaptureType;
   adventurerName?: string;
+  /** basic_info 에서 같이 추출되는 대표 캐릭터명 (모험단명 옆/아래 가장 큰 캐릭 이름). */
+  mainCharacterName?: string;
   characterNames?: string[];
   characters?: Array<{ name: string; klass: string }>;
   raw?: string; // 원본 OCR 텍스트 (디버그)
@@ -37,6 +39,8 @@ export interface DnfOcrResult {
 /** DnfProfile dto 검증. */
 export const dnfProfileSchema = z.object({
   adventurerName: z.string().trim().min(1).max(32).optional(),
+  /** 대표 캐릭터 이름 — basic_info 캡처에서 모험단명과 같이 추출. */
+  mainCharacterName: z.string().trim().min(1).max(32).optional(),
   characters: z
     .array(
       z.object({

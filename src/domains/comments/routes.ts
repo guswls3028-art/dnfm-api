@@ -17,6 +17,7 @@ import { created, ok } from "../../shared/http/response.js";
 import { requireAuth, optionalAuth } from "../../shared/http/middleware/auth.js";
 import { siteFromParam } from "../../shared/http/middleware/site.js";
 import { AppError } from "../../shared/errors/app-error.js";
+import { isSiteAdmin } from "../../shared/auth/permissions.js";
 
 const comments = new Hono();
 
@@ -64,8 +65,7 @@ comments.patch(
     const id = c.req.param("id");
     if (!id) throw AppError.badRequest("comment id required", "id_required");
     const input = c.req.valid("json");
-    // TODO: site_membership 조회로 isAdmin 결정. Stage 2.
-    const isAdmin = false;
+    const isAdmin = await isSiteAdmin(site, userId);
     const comment = await updateComment(site, id, userId, isAdmin, input);
     return ok(c, { comment });
   },
@@ -77,8 +77,7 @@ comments.delete("/sites/:site/comments/:id", requireAuth(), async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
   if (!id) throw AppError.badRequest("comment id required", "id_required");
-  // TODO: site_membership 조회. Stage 2.
-  const isAdmin = false;
+  const isAdmin = await isSiteAdmin(site, userId);
   await deleteComment(site, id, userId, isAdmin);
   return ok(c, { ok: true });
 });

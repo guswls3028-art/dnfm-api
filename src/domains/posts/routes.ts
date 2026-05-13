@@ -22,6 +22,7 @@ import { ok, created } from "../../shared/http/response.js";
 import { requireAuth, optionalAuth } from "../../shared/http/middleware/auth.js";
 import { siteFromParam } from "../../shared/http/middleware/site.js";
 import { AppError } from "../../shared/errors/app-error.js";
+import { isSiteAdmin } from "../../shared/auth/permissions.js";
 
 const posts = new Hono();
 
@@ -83,8 +84,7 @@ posts.patch(
     const id = c.req.param("id");
     if (!id) throw AppError.badRequest("post id required", "id_required");
     const input = c.req.valid("json");
-    // TODO: site_membership 조회로 isAdmin 결정. Stage 2.
-    const isAdmin = false;
+    const isAdmin = await isSiteAdmin(site, userId);
     const post = await updatePost(site, id, userId, isAdmin, input);
     return ok(c, { post });
   },
@@ -96,8 +96,7 @@ posts.delete("/sites/:site/posts/:id", requireAuth(), async (c) => {
   const userId = c.get("userId");
   const id = c.req.param("id");
   if (!id) throw AppError.badRequest("post id required", "id_required");
-  // TODO: site_membership 조회. Stage 2.
-  const isAdmin = false;
+  const isAdmin = await isSiteAdmin(site, userId);
   await deletePost(site, id, userId, isAdmin);
   return ok(c, { ok: true });
 });
