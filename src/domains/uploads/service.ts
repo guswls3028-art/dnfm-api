@@ -3,9 +3,9 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../../shared/db/client.js";
 import { uploads } from "./schema.js";
 import { AppError } from "../../shared/errors/app-error.js";
-import { getPresignedPutUrl } from "../../shared/storage/r2-client.js";
+import { getPresignedPutUrl, putObject } from "../../shared/storage/r2-client.js";
 import { env } from "../../config/env.js";
-import type { ConfirmUploadInput, CreatePresignedUrlInput } from "./dto.js";
+import type { ConfirmUploadInput, CreatePresignedUrlInput, UploadPurpose } from "./dto.js";
 
 /**
  * r2Key → 공개 URL.
@@ -96,4 +96,37 @@ export async function confirmUpload(
     .returning();
   const confirmed = updated[0]!;
   return { ...confirmed, publicUrl: r2KeyToPublicUrl(confirmed.r2Key) };
+}
+
+/**
+ * multipart 본문을 받아 backend 가 직접 R2 에 PUT. CORS 우회.
+ * uploads row 를 ready 로 바로 생성. R2 PUT 후 publicUrl 반환.
+ */
+export async function uploadFileDirect(
+  ownerId: string,
+  input: { purpose: UploadPurpose; contentType: string; sizeBytes: number; body: Buffer | Uint8Array },
+): Promise<{ uploadId: string; r2Key: string; publicUrl: string }> {
+  const r2Key = buildR2Key(input.purpose, ownerId);
+
+  const inserted = await db
+    .insert(uploads)
+    .values({
+      ownerId,
+      r2Key,
+      contentType: input.contentType,
+      sizeBytes: input.sizeBytes,
+      purpose: input.purpose,
+      status: "pending",
+    })
+    .returning();
+  const row = inserted[0]!;
+
+  await putObject(r2Key, input.body, input.contentType);
+
+  await db
+    .update(uploads)
+    .set({ status: "ready", confirmedAt: new Date() })
+    .where(eq(uploads.id, row.id));
+
+  return { uploadId: row.id, r2Key, publicUrl: r2KeyToPublicUrl(r2Key) };
 }

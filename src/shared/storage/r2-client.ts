@@ -67,6 +67,23 @@ export async function getPresignedPutUrl(
   });
 }
 
+/** 직접 PUT — backend 가 객체 본문을 가지고 있을 때. CORS 회피용. */
+export async function putObject(
+  key: string,
+  body: Buffer | Uint8Array,
+  contentType: string,
+): Promise<void> {
+  const client = getClient();
+  await client.send(
+    new PutObjectCommand({
+      Bucket: getBucket(),
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    }),
+  );
+}
+
 /** presigned GET URL — 비공개 객체 임시 노출. */
 export async function getPresignedGetUrl(
   key: string,
