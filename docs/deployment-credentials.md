@@ -5,13 +5,13 @@
 >
 > 실시간 EC2 상태 확인 명령 (마스킹 출력):
 > ```bash
-> ssh -i /tmp/dnfm/ic ec2-user@3.36.42.231 \
+> ssh -i /tmp/dnfm/ic ec2-user@43.202.246.97 \
 >   'awk -F= "/^[A-Z]/ {print \$1\"=<\"(\$2==\"\"?\"empty\":\"set:\"length(\$2)\"chars\")\">\"}" /var/www/dnfm-api/.env'
 > ```
 
 ## 0. 라이브 운영 인프라 좌표
 
-> ⚠️ **2026-05-13 정체성 변경**: `allow` → `hurock` (인터넷 방송인 허락님 페이지). CLAUDE.md / 도메인 mental model 은 `hurock` 이 SSOT. **라이브 인프라(아래 표)는 아직 `allow` 식별자로 운영 중** — §7 rename 백로그 참조. 신규 코드 작성 시 새 식별자 사용하지 말 것 (DB site 컬럼 enum 일관성 위해 rename 마이그레이션 완료 후에만 전환).
+> ⚠️ **2026-05-13/14 rename 완료**: `allow` → `hurock`. 라이브 인프라(EC2 PM2/디렉토리/도메인) 모두 `hurock` 식별자로 운영 중. `allow.dnfm.kr` 은 alias 유지 + Nginx 301 redirect 으로 `hurock.dnfm.kr` 로 영구 이동. DB `site` 컬럼 enum 은 호환 위해 `"allow"` 그대로 두고 frontend 식별자만 hurock 으로 통일.
 
 | 항목 | 값 / 위치 |
 |---|---|
@@ -71,7 +71,7 @@
 
 주입 절차 (값 받은 직후):
 ```bash
-ssh -i /tmp/dnfm/ic ec2-user@3.36.42.231
+ssh -i /tmp/dnfm/ic ec2-user@43.202.246.97
 sudo nano /var/www/dnfm-api/.env
 # KAKAO_OAUTH_CLIENT_ID=...
 # KAKAO_OAUTH_CLIENT_SECRET=...
@@ -107,7 +107,7 @@ openssl rand -base64 48
 
 회전 절차:
 ```bash
-ssh -i /tmp/dnfm/ic ec2-user@3.36.42.231
+ssh -i /tmp/dnfm/ic ec2-user@43.202.246.97
 sudo nano /var/www/dnfm-api/.env
 # JWT_ACCESS_SECRET=<새값>
 # JWT_REFRESH_SECRET=<새값>
