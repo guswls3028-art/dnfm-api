@@ -57,7 +57,6 @@ function publicUser(user: User, username?: string | null) {
     id: user.id,
     username: username ?? null,
     displayName: user.displayName,
-    email: user.email,
     avatarR2Key: user.avatarR2Key,
     dnfProfile: user.dnfProfile,
     createdAt: user.createdAt,
@@ -180,7 +179,7 @@ auth.post("/refresh", authRateLimit, async (c) => {
 
 /**
  * PATCH /auth/me — 본인 프로필 수정.
- *   displayName / email / avatarR2Key / dnfProfile
+ *   displayName / avatarR2Key / dnfProfile
  */
 auth.patch("/me", requireAuth(), zValidator("json", updateProfileDto), async (c) => {
   const user = c.get("user");

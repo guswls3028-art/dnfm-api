@@ -113,7 +113,6 @@ export async function localSignup(
     .insert(users)
     .values({
       displayName: input.displayName,
-      email: input.email,
       dnfProfile: input.dnfProfile,
     })
     .returning();
@@ -236,12 +235,11 @@ export async function rotateRefreshToken(
   return { user, tokens };
 }
 
-/** 프로필 수정 — displayName/email/avatar/dnfProfile. displayName 중복 검사. */
+/** 프로필 수정 — displayName/avatar/dnfProfile. displayName 중복 검사. */
 export async function updateUserProfile(
   userId: string,
   input: {
     displayName?: string;
-    email?: string | null;
     avatarR2Key?: string | null;
     dnfProfile?: User["dnfProfile"];
   },
@@ -260,7 +258,6 @@ export async function updateUserProfile(
 
   const patch: Record<string, unknown> = { updatedAt: new Date() };
   if (input.displayName !== undefined) patch.displayName = input.displayName;
-  if (input.email !== undefined) patch.email = input.email;
   if (input.avatarR2Key !== undefined) patch.avatarR2Key = input.avatarR2Key;
   if (input.dnfProfile !== undefined) patch.dnfProfile = input.dnfProfile;
 

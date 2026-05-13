@@ -11,7 +11,6 @@ export const localSignupDto = z.object({
     .regex(/^[a-zA-Z0-9_]+$/, "영문/숫자/언더스코어만 사용할 수 있습니다."),
   password: z.string().min(4, "비밀번호는 4자 이상이어야 합니다.").max(128),
   displayName: z.string().trim().min(1).max(32),
-  email: z.string().trim().email().max(255).optional(),
   dnfProfile: dnfProfileSchema.optional(),
 });
 export type LocalSignupInput = z.infer<typeof localSignupDto>;
@@ -33,7 +32,6 @@ export type ChangePasswordInput = z.infer<typeof changePasswordDto>;
 /** 프로필 수정. */
 export const updateProfileDto = z.object({
   displayName: z.string().trim().min(1).max(32).optional(),
-  email: z.string().trim().email().max(255).optional().nullable(),
   dnfProfile: dnfProfileSchema.optional(),
 });
 export type UpdateProfileInput = z.infer<typeof updateProfileDto>;

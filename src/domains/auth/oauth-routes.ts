@@ -360,7 +360,6 @@ oauthRoutes.get("/:provider/callback", async (c) => {
     user: {
       id: user.id,
       displayName: user.displayName,
-      email: user.email,
       avatarR2Key: user.avatarR2Key,
       dnfProfile: user.dnfProfile,
     },

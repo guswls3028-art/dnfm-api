@@ -26,22 +26,6 @@ describe("localSignupDto", () => {
     });
     expect(r.success).toBe(false);
   });
-  it("passes optional email validation", () => {
-    const ok = localSignupDto.safeParse({
-      username: "abc",
-      password: "1234",
-      displayName: "x",
-      email: "hi@dnfm.kr",
-    });
-    expect(ok.success).toBe(true);
-    const bad = localSignupDto.safeParse({
-      username: "abc",
-      password: "1234",
-      displayName: "x",
-      email: "not-an-email",
-    });
-    expect(bad.success).toBe(false);
-  });
 });
 
 describe("localLoginDto", () => {
@@ -65,9 +49,5 @@ describe("changePasswordDto + updateProfileDto", () => {
   it("updateProfileDto allows partial updates", () => {
     expect(updateProfileDto.safeParse({}).success).toBe(true);
     expect(updateProfileDto.safeParse({ displayName: "new" }).success).toBe(true);
-    expect(
-      updateProfileDto.safeParse({ email: "bad" }).success,
-    ).toBe(false);
-    expect(updateProfileDto.safeParse({ email: null }).success).toBe(true);
   });
 });
