@@ -10,6 +10,21 @@ import type {
   CreateCategoryInput,
 } from "./dto.js";
 
+/**
+ * post + category 조인 결과 — frontend UI 가 category.name / slug 직접 표시.
+ * category 가 null 이면 (orphan) categorySlug/Name 도 null.
+ */
+function enrichPost<T extends { categoryId: string | null }>(
+  row: T,
+  category: { id: string; slug: string; name: string } | null,
+) {
+  return {
+    ...row,
+    categorySlug: category?.slug ?? null,
+    categoryName: category?.name ?? null,
+  };
+}
+
 /** BEST 자동 승격 임계치. (다음 cycle: env / site 별 조정 가능하게) */
 const BEST_RECOMMEND_THRESHOLD = 10;
 
@@ -140,8 +155,16 @@ export async function listPosts(
 
   const [rows, totalRow] = await Promise.all([
     db
-      .select()
+      .select({
+        post: posts,
+        category: {
+          id: postCategories.id,
+          slug: postCategories.slug,
+          name: postCategories.name,
+        },
+      })
       .from(posts)
+      .leftJoin(postCategories, eq(posts.categoryId, postCategories.id))
       .where(and(...filters))
       .orderBy(...orderBy)
       .limit(query.pageSize)
@@ -153,7 +176,7 @@ export async function listPosts(
   ]);
 
   return {
-    items: rows,
+    items: rows.map((r) => enrichPost(r.post, r.category?.id ? r.category : null)),
     page: query.page,
     pageSize: query.pageSize,
     total: totalRow[0]?.value ?? 0,
@@ -162,13 +185,21 @@ export async function listPosts(
 
 export async function getPostById(site: SiteCode, id: string) {
   const rows = await db
-    .select()
+    .select({
+      post: posts,
+      category: {
+        id: postCategories.id,
+        slug: postCategories.slug,
+        name: postCategories.name,
+      },
+    })
     .from(posts)
+    .leftJoin(postCategories, eq(posts.categoryId, postCategories.id))
     .where(and(eq(posts.site, site), eq(posts.id, id), isNull(posts.deletedAt)))
     .limit(1);
   const row = rows[0];
   if (!row) throw AppError.notFound("글을 찾을 수 없습니다.", "post_not_found");
-  return row;
+  return enrichPost(row.post, row.category?.id ? row.category : null);
 }
 
 /** view_count 증가 — fire and forget OK. */
