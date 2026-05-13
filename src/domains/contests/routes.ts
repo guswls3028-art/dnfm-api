@@ -1,37 +1,38 @@
 import "../../shared/http/hono-env.js";
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
+import { Hono } from "hono";
+import { isSiteAdmin } from "../../shared/auth/permissions.js";
+import { AppError } from "../../shared/errors/app-error.js";
+import { optionalAuth, requireAuth } from "../../shared/http/middleware/auth.js";
+import { siteFromParam } from "../../shared/http/middleware/site.js";
+import { created, ok } from "../../shared/http/response.js";
+import type { SiteCode } from "../../shared/types/site.js";
+import { requireUuid } from "../../shared/validation/uuid.js";
 import {
+  announceResultsDto,
   createContestDto,
-  updateContestDto,
-  listContestsQuery,
   createEntryDto,
+  listContestsQuery,
   listEntriesQuery,
   selectForVoteDto,
-  voteDto,
-  announceResultsDto,
   siteParam,
+  updateContestDto,
+  voteDto,
 } from "./dto.js";
 import {
-  createContest,
-  listContests,
-  getContest,
-  updateContest,
-  deleteContest,
-  createEntry,
-  listEntries,
-  selectEntryForVote,
-  voteForEntry,
-  listResults,
   announceResults,
+  createContest,
+  createEntry,
+  deleteContest,
+  getContest,
+  listContests,
+  listEntries,
+  listResults,
+  selectEntryForVote,
   tallyVotes,
+  updateContest,
+  voteForEntry,
 } from "./service.js";
-import { ok, created } from "../../shared/http/response.js";
-import { requireAuth, optionalAuth } from "../../shared/http/middleware/auth.js";
-import { siteFromParam } from "../../shared/http/middleware/site.js";
-import { AppError } from "../../shared/errors/app-error.js";
-import { isSiteAdmin } from "../../shared/auth/permissions.js";
-import type { SiteCode } from "../../shared/types/site.js";
 
 const contests = new Hono();
 
@@ -89,8 +90,7 @@ contests.post(
 /** GET /sites/:site/contests/:id — 단건 (counts 포함). */
 contests.get("/sites/:site/contests/:id", optionalAuth(), async (c) => {
   const site = c.get("site");
-  const id = c.req.param("id");
-  if (!id) throw AppError.badRequest("contest id required", "id_required");
+  const id = requireUuid(c.req.param("id"), "contest_not_found");
   const result = await getContest(site, id);
   return ok(c, result);
 });
@@ -105,8 +105,7 @@ contests.patch(
     const userId = c.get("userId");
     const isAdmin = await resolveIsAdmin(site, userId);
     if (!isAdmin) requireAdmin();
-    const id = c.req.param("id");
-    if (!id) throw AppError.badRequest("contest id required", "id_required");
+    const id = requireUuid(c.req.param("id"), "contest_not_found");
     const input = c.req.valid("json");
     const contest = await updateContest(site, id, input);
     return ok(c, { contest });
@@ -119,8 +118,7 @@ contests.delete("/sites/:site/contests/:id", requireAuth(), async (c) => {
   const userId = c.get("userId");
   const isAdmin = await resolveIsAdmin(site, userId);
   if (!isAdmin) requireAdmin();
-  const id = c.req.param("id");
-  if (!id) throw AppError.badRequest("contest id required", "id_required");
+  const id = requireUuid(c.req.param("id"), "contest_not_found");
   await deleteContest(site, id);
   return ok(c, { ok: true });
 });
@@ -136,8 +134,7 @@ contests.get(
   zValidator("query", listEntriesQuery),
   async (c) => {
     const site = c.get("site");
-    const id = c.req.param("id");
-    if (!id) throw AppError.badRequest("contest id required", "id_required");
+    const id = requireUuid(c.req.param("id"), "contest_not_found");
     const query = c.req.valid("query");
     const result = await listEntries(site, id, query);
     return ok(c, result);
@@ -152,8 +149,7 @@ contests.post(
   async (c) => {
     const site = c.get("site");
     const userId = c.get("userId");
-    const id = c.req.param("id");
-    if (!id) throw AppError.badRequest("contest id required", "id_required");
+    const id = requireUuid(c.req.param("id"), "contest_not_found");
     const input = c.req.valid("json");
     const entry = await createEntry(site, id, userId, input);
     return created(c, { entry });
@@ -170,9 +166,8 @@ contests.post(
     const userId = c.get("userId");
     const isAdmin = await resolveIsAdmin(site, userId);
     if (!isAdmin) requireAdmin();
-    const id = c.req.param("id");
-    const entryId = c.req.param("entryId");
-    if (!id || !entryId) throw AppError.badRequest("id required", "id_required");
+    const id = requireUuid(c.req.param("id"), "contest_not_found");
+    const entryId = requireUuid(c.req.param("entryId"), "entry_not_found");
     const input = c.req.valid("json");
     const entry = await selectEntryForVote(site, id, entryId, input.selectedForVote);
     return ok(c, { entry });
@@ -191,8 +186,7 @@ contests.post(
   async (c) => {
     const site = c.get("site");
     const userId = c.get("userId");
-    const id = c.req.param("id");
-    if (!id) throw AppError.badRequest("contest id required", "id_required");
+    const id = requireUuid(c.req.param("id"), "contest_not_found");
     const { entryId } = c.req.valid("json");
     const vote = await voteForEntry(site, id, userId, entryId);
     return created(c, { vote });
@@ -202,8 +196,7 @@ contests.post(
 /** GET /sites/:site/contests/:id/tally — 현재 집계 (운영 모니터링용). */
 contests.get("/sites/:site/contests/:id/tally", optionalAuth(), async (c) => {
   const site = c.get("site");
-  const id = c.req.param("id");
-  if (!id) throw AppError.badRequest("contest id required", "id_required");
+  const id = requireUuid(c.req.param("id"), "contest_not_found");
   const tally = await tallyVotes(site, id);
   return ok(c, { tally });
 });
@@ -215,8 +208,7 @@ contests.get("/sites/:site/contests/:id/tally", optionalAuth(), async (c) => {
 /** GET /sites/:site/contests/:id/results — 발표된 결과. */
 contests.get("/sites/:site/contests/:id/results", optionalAuth(), async (c) => {
   const site = c.get("site");
-  const id = c.req.param("id");
-  if (!id) throw AppError.badRequest("contest id required", "id_required");
+  const id = requireUuid(c.req.param("id"), "contest_not_found");
   const results = await listResults(site, id);
   return ok(c, { results });
 });
@@ -231,8 +223,7 @@ contests.post(
     const userId = c.get("userId");
     const isAdmin = await resolveIsAdmin(site, userId);
     if (!isAdmin) requireAdmin();
-    const id = c.req.param("id");
-    if (!id) throw AppError.badRequest("contest id required", "id_required");
+    const id = requireUuid(c.req.param("id"), "contest_not_found");
     const input = c.req.valid("json");
     const results = await announceResults(site, id, input);
     return created(c, { results });

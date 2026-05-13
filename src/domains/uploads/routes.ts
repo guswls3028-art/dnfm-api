@@ -1,11 +1,11 @@
 import "../../shared/http/hono-env.js";
-import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
+import { Hono } from "hono";
+import { requireAuth } from "../../shared/http/middleware/auth.js";
+import { created, ok } from "../../shared/http/response.js";
+import { requireUuid } from "../../shared/validation/uuid.js";
 import { confirmUploadDto, createPresignedUrlDto } from "./dto.js";
 import { confirmUpload, createPresignedPut } from "./service.js";
-import { created, ok } from "../../shared/http/response.js";
-import { requireAuth } from "../../shared/http/middleware/auth.js";
-import { AppError } from "../../shared/errors/app-error.js";
 
 const uploads = new Hono();
 
@@ -36,8 +36,7 @@ uploads.post(
   zValidator("json", confirmUploadDto),
   async (c) => {
     const userId = c.get("userId");
-    const id = c.req.param("id");
-    if (!id) throw AppError.badRequest("upload id required", "id_required");
+    const id = requireUuid(c.req.param("id"), "upload_not_found");
     const input = c.req.valid("json");
     const upload = await confirmUpload(id, userId, input);
     return ok(c, { upload });
