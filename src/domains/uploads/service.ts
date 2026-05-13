@@ -23,7 +23,7 @@ function buildR2Key(purpose: string, userId: string): string {
 export async function createPresignedPut(
   ownerId: string,
   input: CreatePresignedUrlInput,
-): Promise<{ uploadId: string; url: string; r2Key: string }> {
+): Promise<{ uploadId: string; putUrl: string; r2Key: string }> {
   const r2Key = buildR2Key(input.purpose, ownerId);
 
   // DB row 먼저 생성 — 실패 시 R2 호출 안 함
@@ -41,8 +41,8 @@ export async function createPresignedPut(
   const row = inserted[0]!;
 
   // R2 presigned URL 발급
-  const url = await getPresignedPutUrl(r2Key, input.contentType);
-  return { uploadId: row.id, url, r2Key };
+  const putUrl = await getPresignedPutUrl(r2Key, input.contentType);
+  return { uploadId: row.id, putUrl, r2Key };
 }
 
 /**

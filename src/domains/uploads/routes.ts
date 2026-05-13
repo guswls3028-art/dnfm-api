@@ -11,7 +11,7 @@ const uploads = new Hono();
 
 /**
  * POST /uploads/presigned-put — presigned PUT URL 발급.
- * 응답: { uploadId, url, r2Key }
+ * 응답: { uploadId, putUrl, r2Key }
  * 사이트 경계는 uploads 자체에 site 컬럼이 없어 적용하지 않음 — 후속 cycle 에서
  * purpose 별 site scope 필요 시 추가.
  */
