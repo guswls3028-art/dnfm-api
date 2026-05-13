@@ -69,3 +69,21 @@ export async function isSiteAdmin(site: SiteCode, userId: string): Promise<boole
     .limit(1);
   return rows.length > 0;
 }
+
+/**
+ * 어느 사이트든 admin / super 권한이 하나라도 있는지.
+ * 사이트 무관 admin gate (예: cross-site hero banner 업로드) 에서 사용.
+ */
+export async function hasAnyAdminRole(userId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: userSiteRoles.id })
+    .from(userSiteRoles)
+    .where(
+      and(
+        eq(userSiteRoles.userId, userId),
+        inArray(userSiteRoles.role, ["admin", "super"]),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}

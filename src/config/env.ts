@@ -41,6 +41,9 @@ const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().default(""),
   R2_BUCKET: z.string().default("dnfm-uploads"),
   R2_PRESIGN_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+  // R2 public base URL — Cloudflare R2 public dev URL (https://pub-XXXX.r2.dev) 또는 커스텀 도메인.
+  // 비면 publicUrl 미반환 — 클라가 r2Key 만 받고 다른 경로로 노출해야 함.
+  R2_PUBLIC_BASE: z.string().optional().default(""),
 
   ALLOWED_SITES: z
     .string()

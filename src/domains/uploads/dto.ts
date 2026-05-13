@@ -6,12 +6,14 @@ import { z } from "zod";
  *   dnf_capture     : 던파 모바일 스샷
  *   contest_entry   : 콘테스트 출품작
  *   post_attachment : 게시판 글 첨부
+ *   hero_banner     : hero 추천 배너 (admin only)
  */
 export const uploadPurposes = [
   "avatar",
   "dnf_capture",
   "contest_entry",
   "post_attachment",
+  "hero_banner",
 ] as const;
 export type UploadPurpose = (typeof uploadPurposes)[number];
 

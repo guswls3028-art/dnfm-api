@@ -6,6 +6,8 @@ import { created, ok } from "../../shared/http/response.js";
 import { requireUuid } from "../../shared/validation/uuid.js";
 import { confirmUploadDto, createPresignedUrlDto } from "./dto.js";
 import { confirmUpload, createPresignedPut } from "./service.js";
+import { hasAnyAdminRole } from "../../shared/auth/permissions.js";
+import { AppError } from "../../shared/errors/app-error.js";
 
 const uploads = new Hono();
 
@@ -22,6 +24,12 @@ uploads.post(
   async (c) => {
     const userId = c.get("userId");
     const input = c.req.valid("json");
+    if (input.purpose === "hero_banner") {
+      const allowed = await hasAnyAdminRole(userId);
+      if (!allowed) {
+        throw AppError.forbidden("운영자 권한이 필요합니다.", "admin_required");
+      }
+    }
     const result = await createPresignedPut(userId, input);
     return created(c, result);
   },

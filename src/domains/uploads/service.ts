@@ -4,7 +4,14 @@ import { db } from "../../shared/db/client.js";
 import { uploads } from "./schema.js";
 import { AppError } from "../../shared/errors/app-error.js";
 import { getPresignedPutUrl } from "../../shared/storage/r2-client.js";
+import { env } from "../../config/env.js";
 import type { ConfirmUploadInput, CreatePresignedUrlInput } from "./dto.js";
+
+/** r2Key → 공개 URL (R2_PUBLIC_BASE 설정 시). 없으면 null. */
+export function r2KeyToPublicUrl(r2Key: string): string | null {
+  if (!env.R2_PUBLIC_BASE) return null;
+  return `${env.R2_PUBLIC_BASE.replace(/\/+$/, "")}/${r2Key}`;
+}
 
 /**
  * R2 키 생성 규칙: `<purpose>/<userId>/<uuid>`
@@ -23,7 +30,7 @@ function buildR2Key(purpose: string, userId: string): string {
 export async function createPresignedPut(
   ownerId: string,
   input: CreatePresignedUrlInput,
-): Promise<{ uploadId: string; putUrl: string; r2Key: string }> {
+): Promise<{ uploadId: string; putUrl: string; r2Key: string; publicUrl: string | null }> {
   const r2Key = buildR2Key(input.purpose, ownerId);
 
   // DB row 먼저 생성 — 실패 시 R2 호출 안 함
@@ -42,7 +49,7 @@ export async function createPresignedPut(
 
   // R2 presigned URL 발급
   const putUrl = await getPresignedPutUrl(r2Key, input.contentType);
-  return { uploadId: row.id, putUrl, r2Key };
+  return { uploadId: row.id, putUrl, r2Key, publicUrl: r2KeyToPublicUrl(r2Key) };
 }
 
 /**
@@ -81,5 +88,6 @@ export async function confirmUpload(
     })
     .where(eq(uploads.id, uploadId))
     .returning();
-  return updated[0]!;
+  const confirmed = updated[0]!;
+  return { ...confirmed, publicUrl: r2KeyToPublicUrl(confirmed.r2Key) };
 }
