@@ -3,7 +3,12 @@ import { db } from "../../shared/db/client.js";
 import { posts, postCategories, postVotes, type PostVoteType } from "./schema.js";
 import { AppError } from "../../shared/errors/app-error.js";
 import type { SiteCode } from "../../shared/types/site.js";
-import type { CreatePostInput, UpdatePostInput, ListPostsQuery } from "./dto.js";
+import type {
+  CreatePostInput,
+  UpdatePostInput,
+  ListPostsQuery,
+  CreateCategoryInput,
+} from "./dto.js";
 
 /** BEST 자동 승격 임계치. (다음 cycle: env / site 별 조정 가능하게) */
 const BEST_RECOMMEND_THRESHOLD = 10;
@@ -26,6 +31,58 @@ export async function getCategoryById(site: SiteCode, id: string) {
   return rows[0] ?? null;
 }
 
+/** 카테고리 생성 (admin). (site, slug) unique 라 중복 시 conflict. */
+export async function createCategory(site: SiteCode, input: CreateCategoryInput) {
+  const existing = await db
+    .select({ id: postCategories.id })
+    .from(postCategories)
+    .where(and(eq(postCategories.site, site), eq(postCategories.slug, input.slug)))
+    .limit(1);
+  if (existing.length > 0) {
+    throw AppError.conflict("같은 slug 의 카테고리가 이미 있습니다.", "category_slug_taken");
+  }
+  const inserted = await db
+    .insert(postCategories)
+    .values({
+      site,
+      slug: input.slug,
+      name: input.name,
+      description: input.description,
+      sortOrder: input.sortOrder,
+      writeRoleMin: input.writeRoleMin,
+      allowAnonymous: input.allowAnonymous,
+      flairs: input.flairs,
+    })
+    .returning();
+  return inserted[0]!;
+}
+
+/** 카테고리 upsert (seed 전용 — idempotent). slug 충돌 시 update. */
+export async function upsertCategory(site: SiteCode, input: CreateCategoryInput) {
+  const existing = await db
+    .select()
+    .from(postCategories)
+    .where(and(eq(postCategories.site, site), eq(postCategories.slug, input.slug)))
+    .limit(1);
+  const row = existing[0];
+  if (row) {
+    const updated = await db
+      .update(postCategories)
+      .set({
+        name: input.name,
+        description: input.description,
+        sortOrder: input.sortOrder,
+        writeRoleMin: input.writeRoleMin,
+        allowAnonymous: input.allowAnonymous,
+        flairs: input.flairs,
+      })
+      .where(eq(postCategories.id, row.id))
+      .returning();
+    return updated[0]!;
+  }
+  return createCategory(site, input);
+}
+
 /**
  * 글 list — 사이트별 격리. cross-site 조회 불가.
  * sort: recent (최신순) / best (추천수) / views (조회수)
@@ -33,7 +90,24 @@ export async function getCategoryById(site: SiteCode, id: string) {
  */
 export async function listPosts(site: SiteCode, query: ListPostsQuery) {
   const filters = [eq(posts.site, site), isNull(posts.deletedAt)];
-  if (query.categoryId) filters.push(eq(posts.categoryId, query.categoryId));
+  // categoryId 우선, 없으면 categorySlug → id 해석.
+  if (query.categoryId) {
+    filters.push(eq(posts.categoryId, query.categoryId));
+  } else if (query.categorySlug) {
+    const catRows = await db
+      .select({ id: postCategories.id })
+      .from(postCategories)
+      .where(
+        and(eq(postCategories.site, site), eq(postCategories.slug, query.categorySlug)),
+      )
+      .limit(1);
+    const catId = catRows[0]?.id;
+    if (!catId) {
+      // 없는 slug 면 빈 결과. (UI 가 잘못된 카테고리 누른 경우 panic 보다 empty list)
+      return { items: [], page: query.page, pageSize: query.pageSize, total: 0 };
+    }
+    filters.push(eq(posts.categoryId, catId));
+  }
   if (query.flair) filters.push(eq(posts.flair, query.flair));
   if (query.postType) filters.push(eq(posts.postType, query.postType));
   if (query.bestOnly) filters.push(eq(posts.postType, "best"));
@@ -117,7 +191,25 @@ export async function createPost(
   authorId: string,
   input: CreatePostInput,
 ) {
-  await validateCategoryAndFlair(site, input.categoryId, input.flair);
+  // categoryId 우선, 없으면 slug 해석.
+  let resolvedCategoryId = input.categoryId;
+  if (!resolvedCategoryId && input.categorySlug) {
+    const catRows = await db
+      .select({ id: postCategories.id })
+      .from(postCategories)
+      .where(
+        and(eq(postCategories.site, site), eq(postCategories.slug, input.categorySlug)),
+      )
+      .limit(1);
+    if (!catRows[0]) {
+      throw AppError.badRequest("카테고리를 찾을 수 없습니다.", "category_not_found", {
+        slug: input.categorySlug,
+      });
+    }
+    resolvedCategoryId = catRows[0].id;
+  }
+
+  await validateCategoryAndFlair(site, resolvedCategoryId, input.flair);
 
   // notice/ad/best 는 일반 회원 작성 금지 (admin 만 — route 단에서 권한 분기)
   const postType = input.postType ?? "normal";
@@ -129,7 +221,7 @@ export async function createPost(
     .insert(posts)
     .values({
       site,
-      categoryId: input.categoryId,
+      categoryId: resolvedCategoryId,
       authorId,
       title: input.title,
       body: input.body,

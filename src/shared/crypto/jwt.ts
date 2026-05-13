@@ -11,6 +11,9 @@ import { env } from "@/config/env.js";
 export interface AccessTokenPayload {
   sub: string; // user_id
   typ: "access";
+  // user.token_version snapshot — middleware 가 매 요청 검사.
+  // change-password / 강제 logout 시 user.token_version 을 bump 하면 기존 access 즉시 무효.
+  ver: number;
 }
 
 export interface RefreshTokenPayload {
@@ -20,10 +23,12 @@ export interface RefreshTokenPayload {
   jti: string;
 }
 
-export function signAccessToken(userId: string): string {
-  return jwt.sign({ sub: userId, typ: "access" } satisfies AccessTokenPayload, env.JWT_ACCESS_SECRET, {
-    expiresIn: env.JWT_ACCESS_TTL_SECONDS,
-  });
+export function signAccessToken(userId: string, tokenVersion: number): string {
+  return jwt.sign(
+    { sub: userId, typ: "access", ver: tokenVersion } satisfies AccessTokenPayload,
+    env.JWT_ACCESS_SECRET,
+    { expiresIn: env.JWT_ACCESS_TTL_SECONDS },
+  );
 }
 
 export function signRefreshToken(userId: string, jti: string): string {

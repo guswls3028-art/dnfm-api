@@ -7,6 +7,7 @@ import {
   updatePostDto,
   listPostsQuery,
   votePostDto,
+  createCategoryDto,
   siteParam,
 } from "./dto.js";
 import {
@@ -18,6 +19,7 @@ import {
   votePost,
   bumpViewCount,
   listCategories,
+  createCategory,
 } from "./service.js";
 import { ok, created } from "../../shared/http/response.js";
 import { requireAuth, optionalAuth } from "../../shared/http/middleware/auth.js";
@@ -35,6 +37,24 @@ posts.get("/sites/:site/categories", optionalAuth(), async (c) => {
   const rows = await listCategories(site);
   return ok(c, { items: rows });
 });
+
+/** POST /sites/:site/categories — 카테고리 생성 (admin only). */
+posts.post(
+  "/sites/:site/categories",
+  requireAuth(),
+  zValidator("json", createCategoryDto),
+  async (c) => {
+    const site = c.get("site");
+    const userId = c.get("userId");
+    const isAdmin = await isSiteAdmin(site, userId);
+    if (!isAdmin) {
+      throw AppError.forbidden("운영자 권한이 필요합니다.", "admin_required");
+    }
+    const input = c.req.valid("json");
+    const cat = await createCategory(site, input);
+    return ok(c, { category: cat }, undefined, 201);
+  },
+);
 
 /** GET /sites/:site/posts — 글 list (public, 익명도 조회 가능). */
 posts.get(

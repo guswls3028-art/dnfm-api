@@ -31,7 +31,7 @@ export async function issueTokens(
 ): Promise<AuthTokens> {
   const refreshRow = randomBytes(32).toString("hex"); // raw random — JWT 의 jti 로 사용
   const refreshToken = signRefreshToken(userId, refreshRow);
-  const accessToken = signAccessToken(userId);
+  const accessToken = signAccessToken(userId, tokenVersion);
 
   const now = new Date();
   const accessExpiresAt = new Date(now.getTime() + env.JWT_ACCESS_TTL_SECONDS * 1000);

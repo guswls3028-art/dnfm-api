@@ -34,6 +34,11 @@ export function requireAuth() {
     if (user.status !== "active") {
       throw AppError.forbidden("계정이 비활성화 상태입니다.", "account_inactive");
     }
+    // tokenVersion 검사 — change-password / 강제 logout 으로 bump 됐으면 기존 토큰 무효.
+    // legacy access token (ver field 없음) 도 reject — 한 번 재로그인 필요.
+    if (typeof payload.ver !== "number" || payload.ver !== user.tokenVersion) {
+      throw AppError.unauthorized("세션이 만료됐습니다. 다시 로그인해 주세요.", "session_invalid");
+    }
 
     c.set("userId", user.id);
     c.set("user", user);
@@ -50,7 +55,12 @@ export function optionalAuth() {
       const payload = verifyAccessToken(token);
       const found = await db.select().from(users).where(eq(users.id, payload.sub)).limit(1);
       const user = found[0];
-      if (user && user.status === "active") {
+      if (
+        user &&
+        user.status === "active" &&
+        typeof payload.ver === "number" &&
+        payload.ver === user.tokenVersion
+      ) {
         c.set("userId", user.id);
         c.set("user", user);
       }

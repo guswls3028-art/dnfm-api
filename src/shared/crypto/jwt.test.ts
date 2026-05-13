@@ -12,12 +12,13 @@ beforeAll(() => {
 });
 
 describe("jwt sign + verify", () => {
-  it("signs an access token and verifies sub + typ", async () => {
+  it("signs an access token and verifies sub + typ + ver", async () => {
     const { signAccessToken, verifyAccessToken } = await import("./jwt.js");
-    const tok = signAccessToken("user-1");
+    const tok = signAccessToken("user-1", 7);
     const payload = verifyAccessToken(tok);
     expect(payload.sub).toBe("user-1");
     expect(payload.typ).toBe("access");
+    expect(payload.ver).toBe(7);
   });
 
   it("signs a refresh token and verifies jti + typ", async () => {
@@ -31,7 +32,7 @@ describe("jwt sign + verify", () => {
 
   it("rejects an access token when verified as refresh", async () => {
     const { signAccessToken, verifyRefreshToken } = await import("./jwt.js");
-    const tok = signAccessToken("user-3");
+    const tok = signAccessToken("user-3", 0);
     expect(() => verifyRefreshToken(tok)).toThrow();
   });
 });
