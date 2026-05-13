@@ -49,7 +49,8 @@ const envSchema = z.object({
     )
     .default("newb,allow"),
 
-  // Google Cloud Vision (던파 OCR)
+  // 던파 OCR — Gemini Flash 가 1순위 (~10배 저렴), Vision 은 fallback
+  GEMINI_API_KEY: z.string().optional().default(""),
   GOOGLE_APPLICATION_CREDENTIALS: z.string().optional().default(""),
   GOOGLE_VISION_API_KEY: z.string().optional().default(""),
 

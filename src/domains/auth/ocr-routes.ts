@@ -36,13 +36,156 @@ import { logger } from "../../config/logger.js";
 const ocrRoutes = new Hono();
 
 /* -------------------------------------------------------------------------- */
-/* Vision 호출 — API key (REST) 우선, 없으면 SDK (service account)            */
+/* OCR 호출 chain                                                              */
+/*   1. Gemini 2.0 Flash (env.GEMINI_API_KEY) — structured JSON 직접 받기.      */
+/*      Cloud Vision 대비 ~30배 저렴. multimodal 이라 type 별 prompt 분기.    */
+/*   2. Cloud Vision REST API (env.GOOGLE_VISION_API_KEY) — raw text + 후처리. */
+/*   3. Cloud Vision SDK (env.GOOGLE_APPLICATION_CREDENTIALS) — 동일 후처리.   */
+/*   4. mock — 키 모두 미설정.                                                 */
 /* -------------------------------------------------------------------------- */
 
 interface VisionTextResult {
   fullText: string;
   /** TEXT_DETECTION 의 첫 entry 외 나머지 — 라인/단어별 박스. fontSize 추정용. */
   blocks: Array<{ text: string; vertices: Array<{ x: number; y: number }> }>;
+}
+
+/* ---- Gemini Flash — 직접 structured JSON ---- */
+
+interface GeminiCandidate {
+  content?: { parts?: Array<{ text?: string }> };
+}
+
+async function callGemini(
+  type: DnfOcrCaptureType,
+  buffer: Buffer,
+  mime: string,
+): Promise<DnfOcrResult> {
+  const prompt = geminiPromptFor(type);
+  const schema = geminiSchemaFor(type);
+  const body = {
+    contents: [
+      {
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType: mime || "image/jpeg", data: buffer.toString("base64") } },
+        ],
+      },
+    ],
+    generationConfig: {
+      temperature: 0,
+      responseMimeType: "application/json",
+      responseSchema: schema,
+    },
+  };
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw AppError.internal(`Gemini API 실패: ${res.status} ${text.slice(0, 200)}`);
+  }
+  const data = (await res.json()) as { candidates?: GeminiCandidate[] };
+  const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(rawJson) as Record<string, unknown>;
+  } catch {
+    throw AppError.internal("Gemini 응답 JSON 파싱 실패", "ocr_parse_failed");
+  }
+
+  if (type === "basic_info") {
+    return {
+      type,
+      adventurerName: (parsed.adventurerName as string | undefined)?.trim() || undefined,
+      raw: rawJson,
+    };
+  }
+  if (type === "character_list") {
+    const names = (parsed.characterNames as string[] | undefined) ?? [];
+    return {
+      type,
+      characterNames: names.map((s) => s.trim()).filter(Boolean),
+      raw: rawJson,
+    };
+  }
+  // character_select
+  const rawChars =
+    (parsed.characters as Array<{ name?: string; klass?: string }> | undefined) ?? [];
+  // klass 정규화 — 각성명 등으로 들어와도 baseClass 로 매핑.
+  const characters = rawChars
+    .map((c) => {
+      const name = (c.name ?? "").trim();
+      const klassRaw = (c.klass ?? "").trim();
+      if (!name) return null;
+      const entry = klassRaw ? normalizeClassName(klassRaw) : null;
+      return { name, klass: entry?.baseClass ?? klassRaw };
+    })
+    .filter((x): x is { name: string; klass: string } => x !== null);
+  return { type, characters, raw: rawJson };
+}
+
+function geminiPromptFor(type: DnfOcrCaptureType): string {
+  if (type === "basic_info") {
+    return (
+      "이 이미지는 던전앤파이터 모바일 의 '모험단 기본정보' 화면이다." +
+      " 화면 안에 있는 '모험단명' 한국어 텍스트만 정확히 추출해라." +
+      " 캐릭터명·레벨·항마력·서버명은 무시. 모험단명만."
+    );
+  }
+  if (type === "character_list") {
+    return (
+      "이 이미지는 던전앤파이터 모바일 의 '보유 캐릭터' 화면이다." +
+      " 각 캐릭터 카드의 '캐릭터명' 만 추출해 배열로 반환해라." +
+      " 레벨·항마력·직업명·UI 라벨(예: 정보, 모험단)은 캐릭명에서 제외." +
+      " 캐릭명만 깨끗하게."
+    );
+  }
+  return (
+    "이 이미지는 던전앤파이터 모바일 의 '캐릭터 선택' 화면이다." +
+    " 각 캐릭터의 (이름, 직업) 페어를 정확히 매칭해 배열로 반환해라." +
+    " 직업명은 던파의 base class 또는 1차/2차 각성명 (예: 엘레멘탈마스터, 오버마인드, 검신, 베가본드, 카이저)." +
+    " 레벨·항마력·UI 라벨은 무시. 같은 화면에 5개 이상일 수 있음."
+  );
+}
+
+function geminiSchemaFor(type: DnfOcrCaptureType): unknown {
+  if (type === "basic_info") {
+    return {
+      type: "object",
+      properties: { adventurerName: { type: "string" } },
+      required: ["adventurerName"],
+    };
+  }
+  if (type === "character_list") {
+    return {
+      type: "object",
+      properties: {
+        characterNames: { type: "array", items: { type: "string" } },
+      },
+      required: ["characterNames"],
+    };
+  }
+  return {
+    type: "object",
+    properties: {
+      characters: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            klass: { type: "string" },
+          },
+          required: ["name", "klass"],
+        },
+      },
+    },
+    required: ["characters"],
+  };
 }
 
 async function callVisionViaApiKey(base64: string): Promise<VisionTextResult> {
@@ -113,8 +256,16 @@ async function callVisionViaSdk(buffer: Buffer): Promise<VisionTextResult> {
   return { fullText, blocks };
 }
 
+function isGeminiConfigured(): boolean {
+  return Boolean(env.GEMINI_API_KEY);
+}
+
 function isVisionConfigured(): boolean {
   return Boolean(env.GOOGLE_VISION_API_KEY || env.GOOGLE_APPLICATION_CREDENTIALS);
+}
+
+function isAnyOcrConfigured(): boolean {
+  return isGeminiConfigured() || isVisionConfigured();
 }
 
 async function runVision(buffer: Buffer): Promise<VisionTextResult> {
@@ -216,7 +367,7 @@ function extractCharacterWithClass(v: VisionTextResult): Array<{ name: string; k
 /* multipart 이미지 추출                                                      */
 /* -------------------------------------------------------------------------- */
 
-async function readImageBuffer(c: Context): Promise<Buffer> {
+async function readImage(c: Context): Promise<{ buffer: Buffer; mime: string }> {
   const ctype = c.req.header("content-type") ?? "";
   if (!ctype.includes("multipart/form-data")) {
     throw AppError.badRequest("multipart/form-data 가 필요합니다.", "invalid_content_type");
@@ -230,7 +381,7 @@ async function readImageBuffer(c: Context): Promise<Buffer> {
     throw AppError.badRequest("이미지 크기가 10MB 를 초과합니다.", "image_too_large");
   }
   const ab = await file.arrayBuffer();
-  return Buffer.from(ab);
+  return { buffer: Buffer.from(ab), mime: file.type || "image/jpeg" };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -276,12 +427,29 @@ ocrRoutes.post("/ocr/:type", requireAuth(), async (c) => {
   }
   const type = parsed.data;
 
-  if (!isVisionConfigured()) {
+  if (!isAnyOcrConfigured()) {
     const mock = buildMockResult(type);
     return ok(c, { result: mock, source: "mock" });
   }
 
-  const buffer = await readImageBuffer(c);
+  const { buffer, mime } = await readImage(c);
+
+  // 1순위 — Gemini Flash (저렴 + multimodal structured JSON)
+  if (isGeminiConfigured()) {
+    try {
+      const result = await callGemini(type, buffer, mime);
+      return ok(c, { result, source: "gemini" });
+    } catch (e) {
+      logger.warn({ err: e }, "gemini call failed, falling back to vision");
+      if (!isVisionConfigured()) {
+        if (e instanceof AppError) throw e;
+        throw AppError.internal("OCR 처리 중 오류가 발생했습니다.", "ocr_failed");
+      }
+      // fallthrough → Vision
+    }
+  }
+
+  // 2순위 — Cloud Vision REST API or SDK + 후처리
   let visionResult: VisionTextResult;
   try {
     visionResult = await runVision(buffer);
