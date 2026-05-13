@@ -7,6 +7,9 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 
   DATABASE_URL: z.string().min(1, "DATABASE_URL required"),
+  // DB TLS 강제. EC2 동거 PostgreSQL 처럼 ssl unsupported 인 경우 "false" (default).
+  // RDS / Cloud SQL 처럼 ssl 강제 환경에선 "true".
+  DATABASE_SSL: z.string().optional().default("false"),
 
   JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 chars"),
   JWT_REFRESH_SECRET: z.string().min(32, "JWT_REFRESH_SECRET must be at least 32 chars"),
