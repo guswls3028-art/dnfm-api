@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+
+.vscode/
+.idea/
+
+.cache/
+.tmp/
+Thumbs.db
+
+# Drizzle generated artifacts
+# drizzle/  ← migrations 는 commit. cache/_meta 같은 임시는 keep

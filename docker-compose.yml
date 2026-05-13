@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dnfm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dnfm
+      POSTGRES_PASSWORD: dnfm
+      POSTGRES_DB: dnfm
+    ports:
+      - "5432:5432"
+    volumes:
+      - dnfm-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dnfm -d dnfm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  dnfm-pg-data:
