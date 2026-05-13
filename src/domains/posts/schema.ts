@@ -67,9 +67,13 @@ export const posts = pgTable(
     categoryId: uuid("category_id").references(() => postCategories.id, { onDelete: "set null" }),
     // null 이면 익명 글. anonymousMarker 로 작성자 구분.
     authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
-    // 익명 글 표시용 (예: "114.207" — IP 의 일부). authorId 가 null 일 때만.
+    // 비회원 작성자 닉네임 (디시 스타일, default "ㅇㅇ"). authorId null 일 때만 의미.
+    authorNickname: varchar("author_nickname", { length: 32 }),
+    // 비회원 수정/삭제 권한 검증용. bcrypt 해시. null 이면 비회원 + 비번 없음 = 수정/삭제 불가.
+    authorPasswordHash: varchar("author_password_hash", { length: 255 }),
+    // 비회원 글 표시용 (예: "114.207" — IP 의 일부). authorId 가 null 일 때만.
     anonymousMarker: varchar("anonymous_marker", { length: 16 }),
-    // 익명 글 운영용 — 전체 IP / user agent hash. 어드민 view 만.
+    // 비회원 글 운영용 — 전체 IP / user agent hash. 어드민 view 만 + IP 밴 검증.
     anonymousAuditHash: varchar("anonymous_audit_hash", { length: 128 }),
     title: varchar("title", { length: 200 }).notNull(),
     body: text("body").notNull(),
