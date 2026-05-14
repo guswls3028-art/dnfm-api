@@ -1,5 +1,5 @@
 import "../../shared/http/hono-env.js";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { setCookie, getCookie, deleteCookie } from "hono/cookie";
 import { eq, and } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
@@ -13,9 +13,9 @@ import {
 } from "./schema.js";
 import { issueTokens, type AuthTokens } from "./service.js";
 import { env } from "../../config/env.js";
-import { ok } from "../../shared/http/response.js";
 import { AppError } from "../../shared/errors/app-error.js";
 import { logger } from "../../config/logger.js";
+import { SITE_CODES, type SiteCode } from "../../shared/types/site.js";
 
 /**
  * OAuth (Google / Kakao) — same flow:
@@ -34,6 +34,67 @@ const oauthRoutes = new Hono();
 
 const STATE_COOKIE_NAME = "oauth_state";
 const STATE_TTL_SECONDS = 600;
+
+/** site host map — callback 성공/실패 시 frontend 로 302 redirect 할 origin. */
+const SITE_HOSTS: Record<SiteCode, string> = {
+  newb: "https://dnfm.kr",
+  hurock: "https://hurock.dnfm.kr",
+};
+
+function parseSiteParam(raw: string | undefined | null): SiteCode {
+  if (raw && (SITE_CODES as readonly string[]).includes(raw)) return raw as SiteCode;
+  return "newb"; // default
+}
+
+function safeReturnTo(raw: string | undefined | null): string {
+  if (!raw) return "/";
+  if (typeof raw !== "string") return "/";
+  if (!raw.startsWith("/") || raw.startsWith("//")) return "/";
+  return raw;
+}
+
+interface OAuthStatePayload {
+  csrf: string;
+  site: SiteCode;
+  returnTo: string;
+}
+
+function encodeStateCookie(payload: OAuthStatePayload): string {
+  return Buffer.from(JSON.stringify(payload), "utf-8").toString("base64url");
+}
+
+function decodeStateCookie(raw: string | undefined): OAuthStatePayload | null {
+  if (!raw) return null;
+  try {
+    const json = Buffer.from(raw, "base64url").toString("utf-8");
+    const obj = JSON.parse(json) as Partial<OAuthStatePayload>;
+    if (!obj.csrf || !obj.site) return null;
+    if (!(SITE_CODES as readonly string[]).includes(obj.site)) return null;
+    return {
+      csrf: obj.csrf,
+      site: obj.site,
+      returnTo: safeReturnTo(obj.returnTo),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildRedirect(
+  site: SiteCode,
+  pathWithQuery: string,
+): string {
+  const host = SITE_HOSTS[site];
+  const path = pathWithQuery.startsWith("/") ? pathWithQuery : `/${pathWithQuery}`;
+  return `${host}${path}`;
+}
+
+function redirectToFrontendError(c: Context, site: SiteCode, code: string): Response {
+  // returnTo 정보는 state cookie 안에 들어있는데 fail 시 그 자체가 의심스러우니
+  // /login?oauth_error=... 로만 유도. 사용자가 다시 시도하면 정상 path.
+  const url = buildRedirect(site, `/login?oauth_error=${encodeURIComponent(code)}`);
+  return c.redirect(url, 302);
+}
 
 /* -------------------------------------------------------------------------- */
 /* provider 설정                                                              */
@@ -272,8 +333,13 @@ oauthRoutes.get("/:provider/start", async (c) => {
     );
   }
 
-  const state = randomBytes(16).toString("hex");
-  setCookie(c, STATE_COOKIE_NAME, state, {
+  // site / returnTo 쿼리 → state cookie 안에 묶어서 callback 에서 redirect target 결정.
+  const site = parseSiteParam(c.req.query("site"));
+  const returnTo = safeReturnTo(c.req.query("returnTo") ?? c.req.query("next"));
+
+  const csrf = randomBytes(16).toString("hex");
+  const cookieValue = encodeStateCookie({ csrf, site, returnTo });
+  setCookie(c, STATE_COOKIE_NAME, cookieValue, {
     httpOnly: true,
     secure: env.COOKIE_SECURE,
     sameSite: "Lax",
@@ -287,7 +353,8 @@ oauthRoutes.get("/:provider/start", async (c) => {
   url.searchParams.set("redirect_uri", cfg.redirectUri);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", cfg.scope);
-  url.searchParams.set("state", state);
+  // provider state 는 CSRF token 만 — site/returnTo 는 state cookie 에서 복원.
+  url.searchParams.set("state", csrf);
   if (provider === "google") {
     url.searchParams.set("access_type", "online");
     url.searchParams.set("prompt", "select_account");
@@ -301,66 +368,78 @@ oauthRoutes.get("/:provider/start", async (c) => {
 /* -------------------------------------------------------------------------- */
 
 oauthRoutes.get("/:provider/callback", async (c) => {
-  const provider = parseProvider(c.req.param("provider"));
+  let provider: OAuthProvider;
+  try {
+    provider = parseProvider(c.req.param("provider"));
+  } catch {
+    // provider 잘못된 경로 — 기본 site=newb 로 error redirect
+    return redirectToFrontendError(c, "newb", "oauth_invalid_provider");
+  }
+
+  // state cookie 먼저 디코딩 (callback 후 error 시 redirect target 알기 위해)
+  const cookieRaw = getCookie(c, STATE_COOKIE_NAME);
+  const decoded = decodeStateCookie(cookieRaw);
+  const site = decoded?.site ?? "newb";
+  const returnTo = decoded?.returnTo ?? "/";
+
+  // state cookie 즉시 삭제 (1회용) — fail 이든 success 든 동일.
+  deleteCookie(c, STATE_COOKIE_NAME, { domain: env.COOKIE_DOMAIN, path: "/auth" });
+
   const cfg = getProviderConfig(provider);
   if (!cfg) {
-    return c.json(
-      {
-        error: {
-          code: "oauth_not_configured",
-          message: `${provider} OAuth 환경 변수가 설정되어 있지 않습니다.`,
-        },
-      },
-      503,
-    );
+    return redirectToFrontendError(c, site, "oauth_not_configured");
   }
 
   const code = c.req.query("code");
-  const state = c.req.query("state");
-  const cookieState = getCookie(c, STATE_COOKIE_NAME);
+  const stateParam = c.req.query("state");
 
-  if (!code) throw AppError.badRequest("code 가 없습니다.", "oauth_code_missing");
-  if (!state || !cookieState || state !== cookieState) {
-    throw AppError.unauthorized("CSRF state 검증 실패", "oauth_state_mismatch");
-  }
-  // state 쿠키 즉시 삭제 (1회용)
-  deleteCookie(c, STATE_COOKIE_NAME, { domain: env.COOKIE_DOMAIN, path: "/auth" });
-
-  const { access_token } = await exchangeCodeForToken(cfg, code);
-
-  // userinfo + raw (한 번만 호출, 응답 본문 재사용 위해 inline)
-  const userinfoRes = await fetch(cfg.userinfoUrl, {
-    method: "GET",
-    headers: { authorization: `Bearer ${access_token}` },
-  });
-  if (!userinfoRes.ok) {
-    throw AppError.unauthorized("OAuth 사용자 정보 조회 실패", "oauth_userinfo_failed");
-  }
-  const raw = (await userinfoRes.json()) as Record<string, unknown>;
-  const profile = normalizeProviderProfile(provider, raw);
-
-  const { user, isNew } = await upsertOauthUser(provider, profile, raw);
-  if (user.status !== "active") {
-    throw AppError.forbidden("계정이 비활성화 상태입니다.", "account_inactive");
+  // provider 가 error= 로 돌려보내는 경우 (사용자가 동의 거부 등)
+  const oauthErr = c.req.query("error");
+  if (oauthErr) {
+    logger.info({ oauthErr, provider, site }, "oauth provider returned error");
+    return redirectToFrontendError(c, site, `oauth_provider_${oauthErr.slice(0, 32)}`);
   }
 
-  const tokens = await issueTokens(user.id, user.tokenVersion, {
-    userAgent: c.req.header("user-agent") ?? undefined,
-    ipAddress: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
-  });
-  setAuthCookies(c, tokens);
+  if (!code) {
+    return redirectToFrontendError(c, site, "oauth_code_missing");
+  }
+  if (!decoded || !stateParam || stateParam !== decoded.csrf) {
+    return redirectToFrontendError(c, site, "oauth_state_mismatch");
+  }
 
-  return ok(c, {
-    user: {
-      id: user.id,
-      displayName: user.displayName,
-      avatarR2Key: user.avatarR2Key,
-      dnfProfile: user.dnfProfile,
-    },
-    provider,
-    /** 신규 OAuth 가입자 — frontend 가 /signup/setup 으로 유도. */
-    isNew,
-  });
+  try {
+    const { access_token } = await exchangeCodeForToken(cfg, code);
+    const userinfoRes = await fetch(cfg.userinfoUrl, {
+      method: "GET",
+      headers: { authorization: `Bearer ${access_token}` },
+    });
+    if (!userinfoRes.ok) {
+      logger.warn({ status: userinfoRes.status, provider }, "oauth userinfo failed");
+      return redirectToFrontendError(c, site, "oauth_userinfo_failed");
+    }
+    const raw = (await userinfoRes.json()) as Record<string, unknown>;
+    const profile = normalizeProviderProfile(provider, raw);
+
+    const { user, isNew } = await upsertOauthUser(provider, profile, raw);
+    if (user.status !== "active") {
+      return redirectToFrontendError(c, site, "account_inactive");
+    }
+
+    const tokens = await issueTokens(user.id, user.tokenVersion, {
+      userAgent: c.req.header("user-agent") ?? undefined,
+      ipAddress: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
+    });
+    setAuthCookies(c, tokens);
+
+    // 신규 OAuth 가입자 → /signup/setup (닉네임 등 설정).
+    // 기존 사용자 → returnTo 또는 /.
+    const targetPath = isNew ? "/signup/setup" : returnTo;
+    return c.redirect(buildRedirect(site, targetPath), 302);
+  } catch (err) {
+    const code = err instanceof AppError ? err.code : "oauth_token_failed";
+    logger.warn({ err, code, provider, site }, "oauth callback error");
+    return redirectToFrontendError(c, site, code ?? "oauth_token_failed");
+  }
 });
 
 export default oauthRoutes;
