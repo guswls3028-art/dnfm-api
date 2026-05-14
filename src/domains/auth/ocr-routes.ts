@@ -1,12 +1,13 @@
 import { ocrRateLimit } from "@/shared/http/middleware/rate-limit.js";
 import "../../shared/http/hono-env.js";
 import { Hono, type Context } from "hono";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { db } from "../../shared/db/client.js";
 import { users, type DnfProfile } from "./schema.js";
 import {
+  computeVerified,
   dnfOcrCaptureTypeSchema,
   dnfProfileSchema,
   type DnfOcrCaptureType,
@@ -79,7 +80,7 @@ async function callGemini(
       responseSchema: schema,
     },
   };
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -99,11 +100,16 @@ async function callGemini(
   }
 
   if (type === "basic_info") {
+    const rawClass = (parsed.mainCharacterClass as string | undefined)?.trim();
+    const normalizedClass = rawClass
+      ? normalizeClassName(rawClass)?.baseClass ?? rawClass
+      : undefined;
     return {
       type,
       adventurerName: (parsed.adventurerName as string | undefined)?.trim() || undefined,
       mainCharacterName:
         (parsed.mainCharacterName as string | undefined)?.trim() || undefined,
+      mainCharacterClass: normalizedClass,
       raw: rawJson,
     };
   }
@@ -134,13 +140,12 @@ async function callGemini(
 function geminiPromptFor(type: DnfOcrCaptureType): string {
   if (type === "basic_info") {
     return (
-      "이 이미지는 던전앤파이터 모바일 의 '모험단 기본정보' 화면이다." +
-      " 두 가지를 정확히 추출해라:" +
-      " (1) adventurerName — '모험단명' 한국어 텍스트 (예: '광기의 파도')." +
-      " (2) mainCharacterName — 대표 캐릭터 이름. 모험단명 옆/아래에 표시되는" +
-      " 대표 캐릭터 (보통 가장 큰 글자 또는 '대표' 라벨 옆) 의 캐릭터명 한 개." +
-      " 레벨·항마력·서버명·UI 라벨(예: 정보, 모험단, 기본정보) 은 둘 다 제외." +
-      " 정확히 찾을 수 없으면 빈 문자열."
+      "이 이미지는 던전앤파이터 모바일의 '정보 → 모험단 → 기본정보' 화면이다. 세 값 추출:" +
+      " (1) mainCharacterName — '대표 캐릭터' 박스의 캐릭 이름 한 개." +
+      " (2) mainCharacterClass — 같은 박스의 직업명 (예: 오버마인드, 세라핌, 카이저)." +
+      " (3) adventurerName — 상단 명패에서 칭호(예: '광기의 파도')는 제외하고 옆/아래 작은" +
+      " 텍스트(예: '소비에트연맹', '잭터')가 모험단명. 불확실하면 빈 문자열." +
+      " 항마력은 절대 추출 X. 레벨·서버명·길드·UI 라벨 제외."
     );
   }
   if (type === "character_list") {
@@ -166,8 +171,9 @@ function geminiSchemaFor(type: DnfOcrCaptureType): unknown {
       properties: {
         adventurerName: { type: "string" },
         mainCharacterName: { type: "string" },
+        mainCharacterClass: { type: "string" },
       },
-      required: ["adventurerName", "mainCharacterName"],
+      required: ["adventurerName", "mainCharacterName", "mainCharacterClass"],
     };
   }
   if (type === "character_list") {
@@ -533,6 +539,7 @@ ocrRoutes.post("/ocr/:type",
 const confirmDto = z.object({
   adventurerName: z.string().trim().min(1).max(32).optional(),
   mainCharacterName: z.string().trim().min(1).max(32).optional(),
+  mainCharacterClass: z.string().trim().min(1).max(32).optional(),
   characters: z
     .array(
       z.object({
@@ -542,9 +549,10 @@ const confirmDto = z.object({
     )
     .max(50)
     .optional(),
-  /** OCR 단계 결과 — verifiedBySelectScreen 계산에 사용. */
-  characterListNames: z.array(z.string().trim().min(1).max(32)).max(50).optional(),
+  /** character_select 화면에서 추출된 캐릭 이름 — verified 계산. */
   characterSelectNames: z.array(z.string().trim().min(1).max(32)).max(50).optional(),
+  /** @deprecated 레거시 호환. 인증 신호 안 씀. */
+  characterListNames: z.array(z.string().trim().min(1).max(32)).max(50).optional(),
   captureR2Keys: z
     .object({
       basicInfo: z.string().max(512).optional(),
@@ -554,33 +562,21 @@ const confirmDto = z.object({
     .optional(),
 });
 
-/**
- * overlap 비율 — character_list ∩ character_select.
- *   분모: smaller set 크기 (한쪽이 적으면 overlap 보장 어려움).
- *   threshold: 0.5 (50%).
- */
-function computeVerified(listNames: string[] = [], selectNames: string[] = []): boolean {
-  const norm = (s: string) => s.replace(/\s+/g, "").trim();
-  const a = new Set(listNames.map(norm).filter(Boolean));
-  const b = new Set(selectNames.map(norm).filter(Boolean));
-  if (a.size === 0 || b.size === 0) return false;
-  let overlap = 0;
-  for (const x of a) if (b.has(x)) overlap++;
-  const denom = Math.min(a.size, b.size);
-  return overlap / denom >= 0.5;
-}
-
 ocrRoutes.post("/confirm", requireAuth(), zValidator("json", confirmDto), async (c) => {
   const user = c.get("user");
   const input = c.req.valid("json");
 
-  const verified = computeVerified(input.characterListNames, input.characterSelectNames);
+  const verifyName = input.mainCharacterName ?? user.dnfProfile?.mainCharacterName;
+  const verified = computeVerified(verifyName, input.characterSelectNames ?? []);
 
   const nextProfile: DnfProfile = {
     ...(user.dnfProfile ?? {}),
     ...(input.adventurerName !== undefined && { adventurerName: input.adventurerName }),
     ...(input.mainCharacterName !== undefined && {
       mainCharacterName: input.mainCharacterName,
+    }),
+    ...(input.mainCharacterClass !== undefined && {
+      mainCharacterClass: input.mainCharacterClass,
     }),
     ...(input.characters !== undefined && { characters: input.characters }),
     verifiedBySelectScreen: verified,
@@ -597,10 +593,40 @@ ocrRoutes.post("/confirm", requireAuth(), zValidator("json", confirmDto), async 
   const profileShape = dnfProfileSchema.partial().safeParse({
     adventurerName: nextProfile.adventurerName,
     mainCharacterName: nextProfile.mainCharacterName,
+    mainCharacterClass: nextProfile.mainCharacterClass,
     characters: nextProfile.characters,
   });
   if (!profileShape.success) {
     throw AppError.unprocessable("프로필 형식이 올바르지 않습니다.", "invalid_profile");
+  }
+
+  // 사칭 알림 — verified=true 박는 시점에 동일 mainCharacterName 으로 이미 인증된 다른 user
+  // 가 있으면 logger warn (운영 모니터링). 캐릭선택창은 사칭 불가 신뢰 절대지만 패턴 관찰용.
+  if (verified && nextProfile.mainCharacterName) {
+    try {
+      const dup = await db
+        .select({ id: users.id, displayName: users.displayName, createdAt: users.createdAt })
+        .from(users)
+        .where(
+          sql`${users.id} <> ${user.id}
+              AND ${users.dnfProfile}->>'mainCharacterName' = ${nextProfile.mainCharacterName}
+              AND (${users.dnfProfile}->>'verifiedBySelectScreen')::boolean = true`,
+        )
+        .limit(5);
+      if (dup.length > 0) {
+        logger.warn(
+          {
+            event: "dnf_profile.duplicate_verified_main_character",
+            mainCharacterName: nextProfile.mainCharacterName,
+            newUser: { id: user.id, displayName: user.displayName },
+            existing: dup,
+          },
+          `사칭 의심 — 동일 mainCharacterName "${nextProfile.mainCharacterName}" 으로 인증된 user 가 이미 ${dup.length} 명 존재`,
+        );
+      }
+    } catch (e) {
+      logger.warn({ err: e }, "duplicate-main-character check failed (non-blocking)");
+    }
   }
 
   const updated = await db
@@ -613,6 +639,249 @@ ocrRoutes.post("/confirm", requireAuth(), zValidator("json", confirmDto), async 
     dnfProfile: updated[0]?.dnfProfile ?? nextProfile,
     verifiedBySelectScreen: verified,
   });
+});
+
+/* -------------------------------------------------------------------------- */
+/* POST /auth/dnf-profile/ocr/auto — multi-image 통합 (사용자 정책)           */
+/*   3종 화면 자동 분류 + 머지 + verify (사칭 방지).                          */
+/* -------------------------------------------------------------------------- */
+
+interface AutoBasicInfo {
+  adventurerName?: string;
+  mainCharacterName?: string;
+  mainCharacterClass?: string;
+}
+interface AutoCharacter {
+  name: string;
+  klass: string;
+}
+interface AutoPerImage {
+  index: number;
+  fileName?: string;
+  screenType: "basic_info" | "character_list" | "character_select" | "unknown";
+  basicInfo?: AutoBasicInfo;
+  characters?: AutoCharacter[];
+  raw?: string;
+  error?: string;
+}
+interface AutoMerged {
+  adventurerName?: string;
+  mainCharacterName?: string;
+  mainCharacterClass?: string;
+  characters: AutoCharacter[];
+  verifiedBySelectScreen: boolean;
+}
+
+const AUTO_PROMPT =
+  "이 이미지는 던전앤파이터 모바일의 어느 화면인지 분류하고 정보 추출. 3 화면:\n" +
+  "A) screenType='basic_info' — 정보→모험단→기본정보. 추출:\n" +
+  "   basicInfo.adventurerName (명패 칭호 제외, 옆 작은 텍스트 — 예 '소비에트연맹')\n" +
+  "   basicInfo.mainCharacterName ('대표 캐릭터' 박스 캐릭 이름)\n" +
+  "   basicInfo.mainCharacterClass (같은 박스 직업명)\n" +
+  "B) screenType='character_list' — 모험단→보유캐릭터. characters[] 추출 (name+klass).\n" +
+  "C) screenType='character_select' — 로그인 직후 캐릭터 선택창. characters[] 추출.\n" +
+  "둘 다 아니면 'unknown'. 항마력 절대 추출 X. 레벨/서버/길드/UI 라벨 제외.";
+
+const AUTO_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    screenType: {
+      type: "string",
+      enum: ["basic_info", "character_list", "character_select", "unknown"],
+    },
+    basicInfo: {
+      type: "object",
+      properties: {
+        adventurerName: { type: "string" },
+        mainCharacterName: { type: "string" },
+        mainCharacterClass: { type: "string" },
+      },
+    },
+    characters: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { name: { type: "string" }, klass: { type: "string" } },
+      },
+    },
+  },
+  required: ["screenType"],
+} as const;
+
+async function autoClassifyAndExtract(
+  buffer: Buffer,
+  mime: string,
+  index: number,
+  fileName: string,
+): Promise<AutoPerImage> {
+  const body = {
+    contents: [
+      {
+        parts: [
+          { text: AUTO_PROMPT },
+          { inlineData: { mimeType: mime || "image/jpeg", data: buffer.toString("base64") } },
+        ],
+      },
+    ],
+    generationConfig: {
+      temperature: 0,
+      responseMimeType: "application/json",
+      responseSchema: AUTO_RESPONSE_SCHEMA,
+    },
+  };
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    logger.warn({ status: res.status, text, fileName }, "gemini auto call failed");
+    return { index, fileName, screenType: "unknown", error: `gemini_${res.status}` };
+  }
+  const data = (await res.json()) as { candidates?: GeminiCandidate[] };
+  const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  // 항마력 prompt drift 감지.
+  if (/\b\d{3,}[,.]\d{3}\b|항마력|combat\s*power/i.test(rawJson)) {
+    logger.warn({ fileName, sample: rawJson.slice(0, 200) }, "ocr.auto: 항마력 노출 의심 — drift");
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(rawJson) as Record<string, unknown>;
+  } catch {
+    return { index, fileName, screenType: "unknown", raw: rawJson, error: "parse_failed" };
+  }
+
+  const screenType = parsed.screenType as AutoPerImage["screenType"] | undefined;
+  if (screenType === "basic_info") {
+    const bi = (parsed.basicInfo ?? {}) as {
+      adventurerName?: string;
+      mainCharacterName?: string;
+      mainCharacterClass?: string;
+    };
+    const rawClass = bi.mainCharacterClass?.trim();
+    const normalizedClass = rawClass
+      ? normalizeClassName(rawClass)?.baseClass ?? rawClass
+      : undefined;
+    return {
+      index,
+      fileName,
+      screenType,
+      basicInfo: {
+        adventurerName: bi.adventurerName?.trim() || undefined,
+        mainCharacterName: bi.mainCharacterName?.trim() || undefined,
+        mainCharacterClass: normalizedClass,
+      },
+      raw: rawJson,
+    };
+  }
+  if (screenType === "character_list" || screenType === "character_select") {
+    const chars = (parsed.characters as Array<{ name?: string; klass?: string }> | undefined) ?? [];
+    const characters: AutoCharacter[] = [];
+    for (const c of chars) {
+      const name = c.name?.trim();
+      if (!name) continue;
+      const klassRaw = c.klass?.trim();
+      const entry = klassRaw ? normalizeClassName(klassRaw) : null;
+      characters.push({ name, klass: entry?.baseClass ?? klassRaw ?? "" });
+    }
+    return { index, fileName, screenType, characters, raw: rawJson };
+  }
+  return { index, fileName, screenType: "unknown", raw: rawJson };
+}
+
+function mergeAutoResults(perImage: AutoPerImage[]): AutoMerged {
+  let basicInfo: AutoBasicInfo | undefined;
+  const charsFromList: AutoCharacter[] = [];
+  const charsFromSelect: AutoCharacter[] = [];
+  for (const r of perImage) {
+    if (r.screenType === "basic_info" && r.basicInfo && !basicInfo) basicInfo = r.basicInfo;
+    if (r.screenType === "character_list" && r.characters) charsFromList.push(...r.characters);
+    if (r.screenType === "character_select" && r.characters) charsFromSelect.push(...r.characters);
+  }
+  const seen = new Set<string>();
+  const uniqueChars: AutoCharacter[] = [];
+  for (const c of [...charsFromSelect, ...charsFromList]) {
+    if (!c.name || seen.has(c.name)) continue;
+    seen.add(c.name);
+    uniqueChars.push(c);
+  }
+  // 인증 = mainCharacterName ∈ character_select 화면 캐릭만 (사칭 방지).
+  const verified = computeVerified(
+    basicInfo?.mainCharacterName,
+    charsFromSelect.map((c) => c.name),
+  );
+  return {
+    adventurerName: basicInfo?.adventurerName,
+    mainCharacterName: basicInfo?.mainCharacterName,
+    mainCharacterClass: basicInfo?.mainCharacterClass,
+    characters: uniqueChars,
+    verifiedBySelectScreen: verified,
+  };
+}
+
+function buildAutoMock(): AutoMerged {
+  return {
+    adventurerName: "소비에트연맹",
+    mainCharacterName: "지금간다",
+    mainCharacterClass: "엘레멘탈마스터",
+    characters: [
+      { name: "지금간다", klass: "엘레멘탈마스터" },
+      { name: "방장여", klass: "블레이드" },
+    ],
+    verifiedBySelectScreen: true,
+  };
+}
+
+// 라우트 등록 — /ocr/auto 가 /ocr/:type 보다 specific 하므로 위에 등록 (first-match-wins 회피).
+// 하지만 ocr-routes.ts 안에서는 /ocr/:type 가 이미 위에 등록돼 있어 별도 mount 가 필요.
+// → 본 endpoint 를 main route 등록 X 하고 wrapper 로 노출.
+const autoEndpointPath = "/ocr-auto";
+ocrRoutes.post(autoEndpointPath, ocrRateLimit, async (c) => {
+  const ctype = c.req.header("content-type") ?? "";
+  if (!ctype.includes("multipart/form-data")) {
+    throw AppError.badRequest("multipart/form-data 가 필요합니다.", "invalid_content_type");
+  }
+  const form = await c.req.parseBody({ all: true });
+  const files: File[] = [];
+  for (const v of Object.values(form)) {
+    const arr = Array.isArray(v) ? v : [v];
+    for (const item of arr) if (item instanceof File && item.size > 0) files.push(item);
+  }
+  if (files.length === 0) {
+    throw AppError.badRequest("이미지 파일이 없습니다.", "image_required");
+  }
+  if (files.length > 5) {
+    throw AppError.badRequest("한 번에 최대 5장까지 업로드 가능합니다.", "too_many_images");
+  }
+  for (const f of files) {
+    if (f.size > 10 * 1024 * 1024) {
+      throw AppError.badRequest(`이미지 크기가 10MB 를 초과합니다 (${f.name}).`, "image_too_large");
+    }
+  }
+
+  if (!env.GEMINI_API_KEY) {
+    return ok(c, {
+      merged: buildAutoMock(),
+      perImage: files.map((f, i) => ({
+        index: i,
+        fileName: f.name,
+        screenType: "unknown" as const,
+      })),
+      source: "mock",
+    });
+  }
+
+  const perImage = await Promise.all(
+    files.map(async (f, i) => {
+      const buffer = Buffer.from(await f.arrayBuffer());
+      const mime = f.type || "image/jpeg";
+      return autoClassifyAndExtract(buffer, mime, i, f.name);
+    }),
+  );
+  const merged = mergeAutoResults(perImage);
+  return ok(c, { merged, perImage, source: "gemini" });
 });
 
 export default ocrRoutes;

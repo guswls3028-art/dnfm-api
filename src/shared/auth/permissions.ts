@@ -87,3 +87,19 @@ export async function hasAnyAdminRole(userId: string): Promise<boolean> {
     .limit(1);
   return rows.length > 0;
 }
+
+/** super("*") 권한 — test cleanup 등 cross-site 위험 작업 gate. */
+export async function isSuper(userId: string): Promise<boolean> {
+  const rows = await db
+    .select({ id: userSiteRoles.id })
+    .from(userSiteRoles)
+    .where(
+      and(
+        eq(userSiteRoles.userId, userId),
+        eq(userSiteRoles.site, "*"),
+        eq(userSiteRoles.role, "super"),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}

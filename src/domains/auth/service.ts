@@ -242,6 +242,8 @@ export async function updateUserProfile(
     displayName?: string;
     avatarR2Key?: string | null;
     dnfProfile?: User["dnfProfile"];
+    viewerPlatform?: User["viewerPlatform"] | null;
+    viewerNickname?: User["viewerNickname"] | null;
   },
 ): Promise<User> {
   if (input.displayName !== undefined) {
@@ -260,6 +262,8 @@ export async function updateUserProfile(
   if (input.displayName !== undefined) patch.displayName = input.displayName;
   if (input.avatarR2Key !== undefined) patch.avatarR2Key = input.avatarR2Key;
   if (input.dnfProfile !== undefined) patch.dnfProfile = input.dnfProfile;
+  if (input.viewerPlatform !== undefined) patch.viewerPlatform = input.viewerPlatform;
+  if (input.viewerNickname !== undefined) patch.viewerNickname = input.viewerNickname;
 
   const updated = await db.update(users).set(patch).where(eq(users.id, userId)).returning();
   const user = updated[0];

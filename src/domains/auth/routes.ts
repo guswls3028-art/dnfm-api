@@ -20,7 +20,8 @@ import { env } from "@/config/env.js";
 import { authRateLimit } from "@/shared/http/middleware/rate-limit.js";
 import { ok, created } from "@/shared/http/response.js";
 import { requireAuth } from "@/shared/http/middleware/auth.js";
-import { getAllUserSiteRoles } from "@/shared/auth/permissions.js";
+import { getAllUserSiteRoles, isSuper } from "@/shared/auth/permissions.js";
+import { AppError } from "@/shared/errors/app-error.js";
 import type { User } from "./schema.js";
 import ocrRoutes from "./ocr-routes.js";
 import oauthRoutes from "./oauth-routes.js";
@@ -59,6 +60,8 @@ function publicUser(user: User, username?: string | null) {
     displayName: user.displayName,
     avatarR2Key: user.avatarR2Key,
     dnfProfile: user.dnfProfile,
+    viewerPlatform: user.viewerPlatform ?? null,
+    viewerNickname: user.viewerNickname ?? null,
     createdAt: user.createdAt,
   };
 }
@@ -212,8 +215,56 @@ auth.post(
 );
 
 /**
+ * DELETE /auth/admin/cleanup-test-users — super 권한. E2E test user 정리.
+ *   query: ?prefix=e2e_&maxAgeSec=86400&dryRun=1
+ *   user 삭제 cascade — credentials/oauth/refresh 같이 삭제. posts.authorId set null.
+ */
+const cleanupQuery = z.object({
+  prefix: z.string().trim().min(2).max(32),
+  maxAgeSec: z.coerce.number().int().min(60).max(60 * 60 * 24 * 30).optional(),
+  dryRun: z.coerce.boolean().optional(),
+});
+
+auth.delete(
+  "/admin/cleanup-test-users",
+  requireAuth(),
+  zValidator("query", cleanupQuery),
+  async (c) => {
+    const actor = c.get("user");
+    const superOk = await isSuper(actor.id);
+    if (!superOk) {
+      throw AppError.forbidden("super 권한 전용입니다.", "super_only");
+    }
+    const { prefix, maxAgeSec = 86400, dryRun } = c.req.valid("query");
+    const { db } = await import("@/shared/db/client.js");
+    const { users, userLocalCredentials } = await import("@/domains/auth/schema.js");
+    const { sql, eq, lt, and, inArray } = await import("drizzle-orm");
+    const cutoff = new Date(Date.now() - maxAgeSec * 1000);
+
+    const candidates = await db
+      .select({ id: users.id, displayName: users.displayName, createdAt: users.createdAt })
+      .from(users)
+      .innerJoin(userLocalCredentials, eq(userLocalCredentials.userId, users.id))
+      .where(
+        and(
+          sql`${userLocalCredentials.username} LIKE ${prefix + "%"}`,
+          lt(users.createdAt, cutoff),
+        ),
+      );
+
+    if (dryRun || candidates.length === 0) {
+      return ok(c, { matched: candidates.length, dryRun: true, items: candidates });
+    }
+    const ids = candidates.map((u) => u.id);
+    await db.delete(users).where(inArray(users.id, ids));
+    return ok(c, { deleted: candidates.length, items: candidates });
+  },
+);
+
+/**
  * Sub-routers mount.
  *   /auth/dnf-profile/ocr/:type  (multipart)
+ *   /auth/dnf-profile/ocr/auto   (multipart, multi)
  *   /auth/dnf-profile/confirm
  *   /auth/oauth/:provider/start
  *   /auth/oauth/:provider/callback

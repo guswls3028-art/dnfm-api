@@ -65,7 +65,7 @@ function getProviderConfig(provider: OAuthProvider): ProviderConfig | null {
       authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
       tokenUrl: "https://oauth2.googleapis.com/token",
       userinfoUrl: "https://openidconnect.googleapis.com/v1/userinfo",
-      scope: "openid email profile",
+      scope: "openid profile",
     };
   }
   if (provider === "kakao") {
@@ -79,7 +79,7 @@ function getProviderConfig(provider: OAuthProvider): ProviderConfig | null {
       authorizeUrl: "https://kauth.kakao.com/oauth/authorize",
       tokenUrl: "https://kauth.kakao.com/oauth/token",
       userinfoUrl: "https://kapi.kakao.com/v2/user/me",
-      scope: "profile_nickname account_email",
+      scope: "profile_nickname",
     };
   }
   return null;
@@ -167,11 +167,17 @@ function normalizeProviderProfile(
 /* user upsert + link                                                         */
 /* -------------------------------------------------------------------------- */
 
+interface UpsertOauthResult {
+  user: User;
+  /** 신규 user 생성 — frontend 가 닉네임 setup 페이지로 유도. */
+  isNew: boolean;
+}
+
 async function upsertOauthUser(
   provider: OAuthProvider,
   profile: NormalizedProfile,
   raw: Record<string, unknown>,
-): Promise<User> {
+): Promise<UpsertOauthResult> {
   if (!profile.providerUserId) {
     throw AppError.unauthorized("OAuth providerUserId 누락", "oauth_user_id_missing");
   }
@@ -194,31 +200,19 @@ async function upsertOauthUser(
       .where(eq(userOauthAccounts.id, existing[0].id));
     const u = await db.select().from(users).where(eq(users.id, existing[0].userId)).limit(1);
     if (!u[0]) throw AppError.internal("oauth account 의 user 가 사라졌습니다.");
-    return u[0];
+    return { user: u[0], isNew: false };
   }
 
-  // 2) email 매칭 → 자동 link
-  if (profile.email) {
-    const byEmail = await db.select().from(users).where(eq(users.email, profile.email)).limit(1);
-    if (byEmail[0]) {
-      await db.insert(userOauthAccounts).values({
-        userId: byEmail[0].id,
-        provider,
-        providerUserId: profile.providerUserId,
-        providerEmail: profile.email,
-        providerProfile: raw,
-        lastLoginAt: new Date(),
-      });
-      return byEmail[0];
-    }
-  }
+  // 2) email 자동 link 폐기 — 사용자 정책 "이메일 안 받음" + scope email 미요청 정합.
+  //    같은 provider 의 동일 userId 로만 link (위 1).
 
-  // 3) 신규 user 생성
+  // 3) 신규 user 생성. displayName placeholder — setup 페이지에서 사용자가 본인 닉으로 변경.
+  const placeholder = `${provider}_${profile.providerUserId.slice(0, 8)}`;
   return db.transaction(async (tx) => {
     const inserted = await tx
       .insert(users)
       .values({
-        displayName: profile.displayName.slice(0, 32),
+        displayName: placeholder,
         email: profile.email,
       })
       .returning();
@@ -232,7 +226,7 @@ async function upsertOauthUser(
       providerProfile: raw,
       lastLoginAt: new Date(),
     });
-    return user;
+    return { user, isNew: true };
   });
 }
 
@@ -345,7 +339,7 @@ oauthRoutes.get("/:provider/callback", async (c) => {
   const raw = (await userinfoRes.json()) as Record<string, unknown>;
   const profile = normalizeProviderProfile(provider, raw);
 
-  const user = await upsertOauthUser(provider, profile, raw);
+  const { user, isNew } = await upsertOauthUser(provider, profile, raw);
   if (user.status !== "active") {
     throw AppError.forbidden("계정이 비활성화 상태입니다.", "account_inactive");
   }
@@ -364,6 +358,8 @@ oauthRoutes.get("/:provider/callback", async (c) => {
       dnfProfile: user.dnfProfile,
     },
     provider,
+    /** 신규 OAuth 가입자 — frontend 가 /signup/setup 으로 유도. */
+    isNew,
   });
 });
 
