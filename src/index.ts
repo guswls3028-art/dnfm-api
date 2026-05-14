@@ -12,17 +12,18 @@ const server = serve({ fetch: app.fetch, port: env.PORT, hostname: "0.0.0.0" }, 
 });
 
 async function shutdown(signal: string) {
-  logger.info({ signal }, "shutting down");
+  logger.info({ signal }, "shutting down — waiting in-flight requests (max 180s)");
   server.close(async (err) => {
     if (err) logger.error({ err }, "server close error");
     await closeDb();
     process.exit(0);
   });
-  // hard timeout
+  // hard timeout — OCR multi-image 처리가 30-60s 걸려 in-flight cut 방지.
+  // pm2 kill_timeout 도 ecosystem.config.cjs 에 180000 으로 sync 필요.
   setTimeout(() => {
-    logger.warn("force exit after timeout");
+    logger.warn("force exit after 180s timeout");
     process.exit(1);
-  }, 10_000).unref();
+  }, 180_000).unref();
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));
