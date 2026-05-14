@@ -36,6 +36,11 @@ export const users = pgTable(
     avatarR2Key: varchar("avatar_r2_key", { length: 512 }),
     // 던파 모바일 자유 프로필 JSON
     dnfProfile: jsonb("dnf_profile").$type<DnfProfile>(),
+    // hurock 사이트용 — 사용자가 어느 플랫폼에서 허락 방송을 시청하는지 (youtube / soop / chzzk).
+    // null 이면 미설정. newb 회원은 그대로 null. hurock 가입자가 본인 입력.
+    viewerPlatform: varchar("viewer_platform", { length: 16 }),
+    // hurock 사이트용 — 시청자 닉네임 (스트리머 시청 시 사용하는 닉, 사이트 displayName 과 다를 수 있음).
+    viewerNickname: varchar("viewer_nickname", { length: 32 }),
     // 비활성화 / 정지 / 삭제 플래그
     status: varchar("status", { length: 16 }).notNull().default("active"), // active | suspended | deleted
     // 비번 변경, 강제 logout 등을 위한 token version
