@@ -48,6 +48,50 @@ async function ensurePostInSite(site: SiteCode, postId: string) {
   return row;
 }
 
+/** commenter (회원) 본인 댓글 list — 마이페이지. site 격리. soft delete 제외. */
+export async function listByCommenter(
+  site: SiteCode,
+  commenterId: string,
+  query: ListCommentsQuery,
+) {
+  // posts 조인으로 site 격리.
+  const filters = [
+    eq(comments.authorId, commenterId),
+    eq(posts.site, site),
+    isNull(comments.deletedAt),
+    isNull(posts.deletedAt),
+  ];
+  const offset = (query.page - 1) * query.pageSize;
+  const [rows, totalRow] = await Promise.all([
+    db
+      .select({
+        id: comments.id,
+        postId: comments.postId,
+        body: comments.body,
+        parentId: comments.parentId,
+        createdAt: comments.createdAt,
+        postTitle: posts.title,
+      })
+      .from(comments)
+      .innerJoin(posts, eq(posts.id, comments.postId))
+      .where(and(...filters))
+      .orderBy(asc(comments.createdAt))
+      .limit(query.pageSize)
+      .offset(offset),
+    db
+      .select({ value: count() })
+      .from(comments)
+      .innerJoin(posts, eq(posts.id, comments.postId))
+      .where(and(...filters)),
+  ]);
+  return {
+    items: rows,
+    page: query.page,
+    pageSize: query.pageSize,
+    total: totalRow[0]?.value ?? 0,
+  };
+}
+
 /** post 별 댓글 list (soft delete 제외). 오래된 순. */
 export async function listByPost(site: SiteCode, postId: string, query: ListCommentsQuery) {
   // site 격리 — post 가 해당 site 에 있는지 확인
@@ -115,6 +159,29 @@ export async function createComment(
     throw AppError.forbidden("잠긴 글에는 댓글을 달 수 없습니다.", "post_locked");
   }
 
+  // 대댓글 — 부모가 같은 글에 속하고 살아있는지 + 부모가 또 답글이면 depth 1 강제.
+  if (input.parentId) {
+    const parentRows = await db
+      .select({
+        id: comments.id,
+        postId: comments.postId,
+        parentId: comments.parentId,
+        deletedAt: comments.deletedAt,
+      })
+      .from(comments)
+      .where(eq(comments.id, input.parentId))
+      .limit(1);
+    const parent = parentRows[0];
+    if (!parent) throw AppError.badRequest("부모 댓글을 찾을 수 없습니다.", "parent_not_found");
+    if (parent.deletedAt) throw AppError.badRequest("부모 댓글이 삭제되었습니다.", "parent_deleted");
+    if (parent.postId !== postId) {
+      throw AppError.badRequest("부모 댓글이 같은 글에 없습니다.", "parent_post_mismatch");
+    }
+    if (parent.parentId) {
+      throw AppError.badRequest("답글의 답글은 지원하지 않습니다.", "max_depth_exceeded");
+    }
+  }
+
   const isGuest = !authorId;
   const guestNickname = isGuest ? sanitizeGuestNickname(input.guestNickname) : null;
   const guestPasswordHash =
@@ -127,6 +194,7 @@ export async function createComment(
       .insert(comments)
       .values({
         postId,
+        parentId: input.parentId,
         authorId,
         authorNickname: guestNickname,
         authorPasswordHash: guestPasswordHash,

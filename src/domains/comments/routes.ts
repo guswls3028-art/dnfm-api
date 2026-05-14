@@ -3,7 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { isSiteAdmin } from "../../shared/auth/permissions.js";
 import { getClientIp, getUserAgent } from "../../shared/http/client-ip.js";
-import { optionalAuth } from "../../shared/http/middleware/auth.js";
+import { optionalAuth, requireAuth } from "../../shared/http/middleware/auth.js";
 import { writeRateLimit } from "../../shared/http/middleware/rate-limit.js";
 import { siteFromParam } from "../../shared/http/middleware/site.js";
 import { created, ok } from "../../shared/http/response.js";
@@ -18,6 +18,7 @@ import {
 import {
   createComment,
   deleteComment,
+  listByCommenter,
   listByPost,
   publicComment,
   updateComment,
@@ -26,6 +27,20 @@ import {
 const comments = new Hono();
 
 comments.use("/sites/:site/*", siteFromParam());
+
+/** GET /sites/:site/me/comments — 본인 댓글 list (마이페이지). 회원만. */
+comments.get(
+  "/sites/:site/me/comments",
+  requireAuth(),
+  zValidator("query", listCommentsQuery),
+  async (c) => {
+    const site = c.get("site");
+    const userId = c.get("userId");
+    const query = c.req.valid("query");
+    const result = await listByCommenter(site, userId, query);
+    return ok(c, result);
+  },
+);
 
 /** GET /sites/:site/posts/:postId/comments — 댓글 list (public). */
 comments.get(

@@ -5,13 +5,16 @@ import { posts } from "../posts/schema.js";
 /**
  * 댓글. flat 구조 시작. 향후 대댓글 (parentId self-ref) 추가 가능.
  */
-export const comments = pgTable(
+export const comments: any = pgTable(
   "comments",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     postId: uuid("post_id")
       .notNull()
       .references(() => posts.id, { onDelete: "cascade" }),
+    // 대댓글 — 1단 nested. parentId 가 null 이면 top-level.
+    // self-ref FK; 부모 댓글 삭제 시 자식도 cascade (분쟁 기록 보존이 필요하면 향후 set null 전환).
+    parentId: uuid("parent_id").references((): any => comments.id, { onDelete: "cascade" }),
     // 비회원 댓글 허용. null 이면 익명 + authorNickname/IP 로 식별.
     authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
     // 비회원 작성자 닉네임 (디시 스타일, default "ㅇㅇ"). authorId null 일 때만 의미.

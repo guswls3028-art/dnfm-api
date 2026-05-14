@@ -4,6 +4,8 @@ import { siteCodeSchema } from "../../shared/types/site.js";
 /** 댓글 생성. body 1~5000자. 회원이면 인증으로, 비회원이면 guest 필드로. */
 export const createCommentDto = z.object({
   body: z.string().trim().min(1).max(5000),
+  // 대댓글 — top-level 이면 omit, 답글이면 부모 댓글 ID. 1단까지 허용.
+  parentId: z.string().uuid().optional(),
   guestNickname: z.string().trim().min(1).max(32).optional(),
   guestPassword: z.string().min(4).max(128).optional(),
 });

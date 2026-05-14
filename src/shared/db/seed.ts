@@ -21,14 +21,16 @@ type SeedCategory = {
   flairs: string[];
 };
 
+// 정책 (2026-05-14): 일반 카테고리는 비회원도 작성 가능. IP 끝자리 marker 노출.
+// 공지(notice/broadcast)는 admin only 유지.
 const NEWB_CATEGORIES: SeedCategory[] = [
   {
     slug: "talk",
     name: "잡담",
     description: "자유롭게 떠드는 곳",
     sortOrder: 10,
-    writeRoleMin: "member",
-    allowAnonymous: false,
+    writeRoleMin: "anonymous",
+    allowAnonymous: true,
     flairs: ["일반", "근황", "친목"],
   },
   {
@@ -36,8 +38,8 @@ const NEWB_CATEGORIES: SeedCategory[] = [
     name: "팁/정보",
     description: "뉴비 도움 되는 팁",
     sortOrder: 20,
-    writeRoleMin: "member",
-    allowAnonymous: false,
+    writeRoleMin: "anonymous",
+    allowAnonymous: true,
     flairs: ["가이드", "공략", "장비", "스킬"],
   },
   {
@@ -45,8 +47,8 @@ const NEWB_CATEGORIES: SeedCategory[] = [
     name: "파티/모집",
     description: "같이 던전 갈 사람",
     sortOrder: 30,
-    writeRoleMin: "member",
-    allowAnonymous: false,
+    writeRoleMin: "anonymous",
+    allowAnonymous: true,
     flairs: ["모집", "마감"],
   },
   {
@@ -54,8 +56,8 @@ const NEWB_CATEGORIES: SeedCategory[] = [
     name: "질문",
     description: "뉴비 질문 환영",
     sortOrder: 40,
-    writeRoleMin: "member",
-    allowAnonymous: false,
+    writeRoleMin: "anonymous",
+    allowAnonymous: true,
     flairs: ["일반", "장비", "성장", "이벤트"],
   },
   {
@@ -75,8 +77,8 @@ const HUROCK_CATEGORIES: SeedCategory[] = [
     name: "잡담",
     description: "허락방 자유 게시판",
     sortOrder: 10,
-    writeRoleMin: "member",
-    allowAnonymous: false,
+    writeRoleMin: "anonymous",
+    allowAnonymous: true,
     flairs: ["일반", "방송"],
   },
   {
@@ -84,8 +86,8 @@ const HUROCK_CATEGORIES: SeedCategory[] = [
     name: "응원",
     description: "허락님에게 응원 메시지",
     sortOrder: 20,
-    writeRoleMin: "member",
-    allowAnonymous: false,
+    writeRoleMin: "anonymous",
+    allowAnonymous: true,
     flairs: [],
   },
   {
@@ -93,8 +95,8 @@ const HUROCK_CATEGORIES: SeedCategory[] = [
     name: "콘테스트 Q&A",
     description: "콘테스트 참가 관련 질문",
     sortOrder: 30,
-    writeRoleMin: "member",
-    allowAnonymous: false,
+    writeRoleMin: "anonymous",
+    allowAnonymous: true,
     flairs: ["참가", "투표", "결과"],
   },
   {

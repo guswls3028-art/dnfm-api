@@ -15,6 +15,7 @@ import likesRoutes from "@/domains/likes/routes.js";
 import uploadsRoutes from "@/domains/uploads/routes.js";
 import contestsRoutes from "@/domains/contests/routes.js";
 import heroBannersRoutes from "@/domains/hero_banners/routes.js";
+import reportsRoutes from "@/domains/reports/routes.js";
 
 /**
  * Hono app factory.
@@ -49,6 +50,8 @@ export function createApp() {
   app.route("/", uploadsRoutes);
   // /sites/:site/hero-banners (admin CRUD + public list)
   app.route("/", heroBannersRoutes);
+  // /sites/:site/reports (회원/비회원 접수 + admin 처리)
+  app.route("/", reportsRoutes);
 
   // TODO Stage 2/3: /me/profile, /admin/*
 
