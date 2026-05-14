@@ -222,8 +222,6 @@ export async function getPostById(site: SiteCode, id: string) {
         id: users.id,
         displayName: users.displayName,
         dnfProfile: users.dnfProfile,
-        viewerPlatform: users.viewerPlatform,
-        viewerNickname: users.viewerNickname,
       },
     })
     .from(posts)
