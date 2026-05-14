@@ -461,6 +461,55 @@ function buildMockResult(type: DnfOcrCaptureType): DnfOcrResult {
 /* POST /auth/dnf-profile/ocr/:type                                           */
 /* -------------------------------------------------------------------------- */
 
+// /ocr/auto 는 multi-image 자동 분류. /ocr/:type 보다 먼저 등록해 first-match.
+// 등록 정의는 파일 하단에 — wrapper 통해 같은 핸들러 재사용.
+async function handleOcrAuto(c: Context) {
+  const ctype = c.req.header("content-type") ?? "";
+  if (!ctype.includes("multipart/form-data")) {
+    throw AppError.badRequest("multipart/form-data 가 필요합니다.", "invalid_content_type");
+  }
+  const form = await c.req.parseBody({ all: true });
+  const files: File[] = [];
+  for (const v of Object.values(form)) {
+    const arr = Array.isArray(v) ? v : [v];
+    for (const item of arr) if (item instanceof File && item.size > 0) files.push(item);
+  }
+  if (files.length === 0) {
+    throw AppError.badRequest("이미지 파일이 없습니다.", "image_required");
+  }
+  if (files.length > 5) {
+    throw AppError.badRequest("한 번에 최대 5장까지 업로드 가능합니다.", "too_many_images");
+  }
+  for (const f of files) {
+    if (f.size > 10 * 1024 * 1024) {
+      throw AppError.badRequest(`이미지 크기가 10MB 를 초과합니다 (${f.name}).`, "image_too_large");
+    }
+  }
+  if (!env.GEMINI_API_KEY) {
+    return ok(c, {
+      merged: buildAutoMock(),
+      perImage: files.map((f, i) => ({
+        index: i,
+        fileName: f.name,
+        screenType: "unknown" as const,
+      })),
+      source: "mock",
+    });
+  }
+  const perImage = await Promise.all(
+    files.map(async (f, i) => {
+      const buffer = Buffer.from(await f.arrayBuffer());
+      const mime = f.type || "image/jpeg";
+      return autoClassifyAndExtract(buffer, mime, i, f.name);
+    }),
+  );
+  const merged = mergeAutoResults(perImage);
+  return ok(c, { merged, perImage, source: "gemini" });
+}
+
+// /ocr/auto 는 specific path — /ocr/:type 보다 먼저 등록해야 first-match-wins.
+ocrRoutes.post("/ocr/auto", ocrRateLimit, handleOcrAuto);
+
 // 가입 흐름(아직 cookie 없는 시점)에서도 호출 — requireAuth 제거.
 // 결과는 DB 에 저장 안 함 (분석만 반환). rate limit 으로 abuse 차단.
 ocrRoutes.post("/ocr/:type",
@@ -834,54 +883,7 @@ function buildAutoMock(): AutoMerged {
   };
 }
 
-// 라우트 등록 — /ocr/auto 가 /ocr/:type 보다 specific 하므로 위에 등록 (first-match-wins 회피).
-// 하지만 ocr-routes.ts 안에서는 /ocr/:type 가 이미 위에 등록돼 있어 별도 mount 가 필요.
-// → 본 endpoint 를 main route 등록 X 하고 wrapper 로 노출.
-const autoEndpointPath = "/ocr-auto";
-ocrRoutes.post(autoEndpointPath, ocrRateLimit, async (c) => {
-  const ctype = c.req.header("content-type") ?? "";
-  if (!ctype.includes("multipart/form-data")) {
-    throw AppError.badRequest("multipart/form-data 가 필요합니다.", "invalid_content_type");
-  }
-  const form = await c.req.parseBody({ all: true });
-  const files: File[] = [];
-  for (const v of Object.values(form)) {
-    const arr = Array.isArray(v) ? v : [v];
-    for (const item of arr) if (item instanceof File && item.size > 0) files.push(item);
-  }
-  if (files.length === 0) {
-    throw AppError.badRequest("이미지 파일이 없습니다.", "image_required");
-  }
-  if (files.length > 5) {
-    throw AppError.badRequest("한 번에 최대 5장까지 업로드 가능합니다.", "too_many_images");
-  }
-  for (const f of files) {
-    if (f.size > 10 * 1024 * 1024) {
-      throw AppError.badRequest(`이미지 크기가 10MB 를 초과합니다 (${f.name}).`, "image_too_large");
-    }
-  }
-
-  if (!env.GEMINI_API_KEY) {
-    return ok(c, {
-      merged: buildAutoMock(),
-      perImage: files.map((f, i) => ({
-        index: i,
-        fileName: f.name,
-        screenType: "unknown" as const,
-      })),
-      source: "mock",
-    });
-  }
-
-  const perImage = await Promise.all(
-    files.map(async (f, i) => {
-      const buffer = Buffer.from(await f.arrayBuffer());
-      const mime = f.type || "image/jpeg";
-      return autoClassifyAndExtract(buffer, mime, i, f.name);
-    }),
-  );
-  const merged = mergeAutoResults(perImage);
-  return ok(c, { merged, perImage, source: "gemini" });
-});
+// 레거시 alias — 옛 /ocr-auto path 호출 호환. 위 /ocr/auto handler 재사용.
+ocrRoutes.post("/ocr-auto", ocrRateLimit, handleOcrAuto);
 
 export default ocrRoutes;
