@@ -95,6 +95,7 @@ export async function createContest(site: SiteCode, actorId: string, input: Crea
       voteStartAt,
       voteEndAt,
       coverR2Key: input.coverR2Key,
+      metadata: (input.metadata ?? {}) as Record<string, unknown>,
       createdBy: actorId,
     })
     .returning();
@@ -214,6 +215,8 @@ export async function updateContest(site: SiteCode, id: string, input: UpdateCon
     patch.voteEndAt = parseOptionalDate(input.voteEndAt) ?? null;
   }
   if (input.coverR2Key !== undefined) patch.coverR2Key = input.coverR2Key ?? null;
+  if (input.metadata !== undefined)
+    patch.metadata = input.metadata as Record<string, unknown>;
   if (input.status !== undefined) patch.status = input.status as ContestStatus;
 
   // sanity — voteStartAt < voteEndAt (effective)

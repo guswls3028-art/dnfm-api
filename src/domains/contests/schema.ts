@@ -56,6 +56,15 @@ export const contests = pgTable(
     voteEndAt: timestamp("vote_end_at", { withTimezone: true }),
     // 콘테스트 대표 이미지 (R2)
     coverR2Key: varchar("cover_r2_key", { length: 512 }),
+    /**
+     * 자유 metadata (jsonb).
+     *   - 어드민이 콘테스트 진행에 필요한 부가 정보를 자유롭게 박는 자리.
+     *   - 예: posterEmoji / eventAt / submissionCloses / voteWindow / resultsAt /
+     *     prizePool / categories[] / rules[] / rewards[] / judging{summary, bullets[]}
+     *   - frontend 가 detail 페이지에서 동일 키로 읽어 표시.
+     *   - schema 확장하지 않고 자유 진화 — 후속에 별도 컬럼화 필요 시 migration 추가.
+     */
+    metadata: jsonb("metadata").notNull().default({} as Record<string, unknown>),
     createdBy: uuid("created_by")
       .notNull()
       .references(() => users.id),

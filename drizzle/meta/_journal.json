@@ -43,6 +43,20 @@
       "when": 1778717504518,
       "tag": "0005_mysterious_bromley",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1778719504366,
+      "tag": "0006_third_unicorn",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1778725063673,
+      "tag": "0007_rare_bedlam",
+      "breakpoints": true
     }
   ]
 }

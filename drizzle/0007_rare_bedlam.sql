@@ -1,0 +1,1 @@
+ALTER TABLE "contests" ADD COLUMN "metadata" jsonb DEFAULT '{}'::jsonb NOT NULL;

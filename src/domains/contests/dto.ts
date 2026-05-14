@@ -25,6 +25,7 @@ export const createContestDto = z.object({
   voteStartAt: z.string().datetime().optional(),
   voteEndAt: z.string().datetime().optional(),
   coverR2Key: z.string().max(512).optional(),
+  metadata: z.record(z.string(), z.unknown()).default({}),
   status: z.enum(contestStatuses).default("draft"),
 });
 export type CreateContestInput = z.infer<typeof createContestDto>;
@@ -39,6 +40,7 @@ export const updateContestDto = z.object({
   voteStartAt: z.string().datetime().optional().nullable(),
   voteEndAt: z.string().datetime().optional().nullable(),
   coverR2Key: z.string().max(512).optional().nullable(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
   status: z.enum(contestStatuses).optional(),
 });
 export type UpdateContestInput = z.infer<typeof updateContestDto>;
