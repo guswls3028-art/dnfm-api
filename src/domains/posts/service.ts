@@ -179,9 +179,15 @@ export async function listPosts(site: SiteCode, query: ListPostsQuery, actorId?:
           slug: postCategories.slug,
           name: postCategories.name,
         },
+        author: {
+          id: users.id,
+          displayName: users.displayName,
+          dnfProfile: users.dnfProfile,
+        },
       })
       .from(posts)
       .leftJoin(postCategories, eq(posts.categoryId, postCategories.id))
+      .leftJoin(users, eq(posts.authorId, users.id))
       .where(and(...filters))
       .orderBy(...orderBy)
       .limit(query.pageSize)
@@ -193,7 +199,10 @@ export async function listPosts(site: SiteCode, query: ListPostsQuery, actorId?:
   ]);
 
   return {
-    items: rows.map((r) => enrichPost(r.post, r.category?.id ? r.category : null)),
+    items: rows.map((r) => ({
+      ...enrichPost(r.post, r.category?.id ? r.category : null),
+      author: r.author?.id ? r.author : null,
+    })),
     page: query.page,
     pageSize: query.pageSize,
     total: totalRow[0]?.value ?? 0,
