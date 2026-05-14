@@ -51,12 +51,16 @@ function enrichPost<
 /** BEST 자동 승격 임계치. (다음 cycle: env / site 별 조정 가능하게) */
 const BEST_RECOMMEND_THRESHOLD = 10;
 
-/** 카테고리 조회 (사이트별 list). */
-export async function listCategories(site: SiteCode) {
+/** 카테고리 조회 (사이트별 list). 기본은 active=true 만. */
+export async function listCategories(site: SiteCode, opts?: { includeInactive?: boolean }) {
+  const filters = [eq(postCategories.site, site)];
+  if (!opts?.includeInactive) {
+    filters.push(eq(postCategories.active, true));
+  }
   return db
     .select()
     .from(postCategories)
-    .where(eq(postCategories.site, site))
+    .where(and(...filters))
     .orderBy(postCategories.sortOrder);
 }
 
@@ -90,6 +94,7 @@ export async function createCategory(site: SiteCode, input: CreateCategoryInput)
       writeRoleMin: input.writeRoleMin,
       allowAnonymous: input.allowAnonymous,
       flairs: input.flairs,
+      active: input.active,
     })
     .returning();
   return inserted[0]!;
@@ -113,6 +118,7 @@ export async function upsertCategory(site: SiteCode, input: CreateCategoryInput)
         writeRoleMin: input.writeRoleMin,
         allowAnonymous: input.allowAnonymous,
         flairs: input.flairs,
+        active: input.active,
       })
       .where(eq(postCategories.id, row.id))
       .returning();
@@ -306,6 +312,11 @@ export async function createPost(
   }
 
   const cat = await validateCategoryAndFlair(site, resolvedCategoryId, input.flair);
+
+  // 폐기 카테고리는 신규 글 거부.
+  if (cat && cat.active === false) {
+    throw AppError.badRequest("폐기된 카테고리에는 글을 쓸 수 없습니다.", "category_inactive");
+  }
 
   // 카테고리 자체가 비회원 작성을 허용하는지 검증.
   if (isGuest) {

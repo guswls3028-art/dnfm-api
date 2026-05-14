@@ -16,6 +16,7 @@ export const createCategoryDto = z.object({
   writeRoleMin: z.enum(["anonymous", "member", "admin"]).default("member"),
   allowAnonymous: z.boolean().default(false),
   flairs: z.array(z.string().trim().min(1).max(32)).max(20).default([]),
+  active: z.boolean().default(true),
 });
 export type CreateCategoryInput = z.infer<typeof createCategoryDto>;
 

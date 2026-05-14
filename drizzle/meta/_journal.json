@@ -64,6 +64,13 @@
       "when": 1778732153018,
       "tag": "0008_clumsy_bishop",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1778741190350,
+      "tag": "0009_lethal_lucky_pierre",
+      "breakpoints": true
     }
   ]
 }

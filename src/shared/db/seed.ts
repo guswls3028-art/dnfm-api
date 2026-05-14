@@ -19,14 +19,24 @@ type SeedCategory = {
   writeRoleMin: "anonymous" | "member" | "admin";
   allowAnonymous: boolean;
   flairs: string[];
+  active?: boolean;
 };
 
-// 정책 (2026-05-14): 일반 카테고리는 비회원도 작성 가능. IP 끝자리 marker 노출.
-// 공지(notice/broadcast)는 admin only 유지.
+// 정책 (2026-05-14): 사용자 명세 4종 — 공지·이벤트 / 자유게시판 / 팁·정보 / 질문.
+// party 는 폐기 (active=false) — 기존 글 row 보존 + 신규 노출/작성 차단.
 const NEWB_CATEGORIES: SeedCategory[] = [
   {
+    slug: "notice",
+    name: "공지·이벤트",
+    description: "방장 공지와 이벤트 안내",
+    sortOrder: 1,
+    writeRoleMin: "admin",
+    allowAnonymous: false,
+    flairs: ["공지", "이벤트"],
+  },
+  {
     slug: "talk",
-    name: "잡담",
+    name: "자유게시판",
     description: "자유롭게 떠드는 곳",
     sortOrder: 10,
     writeRoleMin: "anonymous",
@@ -43,31 +53,24 @@ const NEWB_CATEGORIES: SeedCategory[] = [
     flairs: ["가이드", "공략", "장비", "스킬"],
   },
   {
-    slug: "party",
-    name: "파티/모집",
-    description: "같이 던전 갈 사람",
-    sortOrder: 30,
-    writeRoleMin: "anonymous",
-    allowAnonymous: true,
-    flairs: ["모집", "마감"],
-  },
-  {
     slug: "question",
     name: "질문",
     description: "뉴비 질문 환영",
-    sortOrder: 40,
+    sortOrder: 30,
     writeRoleMin: "anonymous",
     allowAnonymous: true,
     flairs: ["일반", "장비", "성장", "이벤트"],
   },
+  // 폐기: party — 기존 글 row 보존. listCategories(public) 응답에서 제외, 신규 글 거부.
   {
-    slug: "notice",
-    name: "공지",
-    description: "방장 공지",
-    sortOrder: 1,
-    writeRoleMin: "admin",
-    allowAnonymous: false,
+    slug: "party",
+    name: "파티/모집",
+    description: "(폐기) 같이 던전 갈 사람",
+    sortOrder: 999,
+    writeRoleMin: "anonymous",
+    allowAnonymous: true,
     flairs: [],
+    active: false,
   },
 ];
 
@@ -112,8 +115,8 @@ const HUROCK_CATEGORIES: SeedCategory[] = [
 
 async function seedSite(site: SiteCode, cats: SeedCategory[]) {
   for (const c of cats) {
-    const row = await upsertCategory(site, c);
-    logger.info({ site, slug: row.slug, id: row.id }, "category upserted");
+    const row = await upsertCategory(site, { ...c, active: c.active ?? true });
+    logger.info({ site, slug: row.slug, id: row.id, active: row.active }, "category upserted");
   }
 }
 

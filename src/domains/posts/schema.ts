@@ -49,6 +49,9 @@ export const postCategories = pgTable(
     allowAnonymous: boolean("allow_anonymous").notNull().default(false),
     // 카테고리별 말머리 enum (JSON array). 예: ["일반","자랑","정보","질문","쿠폰","버그제보","창작"]
     flairs: text("flairs").array().notNull().default([] as string[]),
+    // 활성 여부. false 면 listCategories(public) 응답에서 제외, 신규 글 작성도 거부.
+    // 폐기된 카테고리는 row 보존 (기존 글 유지)하면서 신규 노출만 차단.
+    active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
