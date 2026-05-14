@@ -69,6 +69,16 @@ export async function getLocalUsername(userId: string): Promise<string | null> {
   return rows[0]?.username ?? null;
 }
 
+/** user 의 mustChangePassword 플래그 조회 (없으면 false — OAuth-only 또는 plain). */
+export async function getMustChangePassword(userId: string): Promise<boolean> {
+  const rows = await db
+    .select({ flag: userLocalCredentials.mustChangePassword })
+    .from(userLocalCredentials)
+    .where(eq(userLocalCredentials.userId, userId))
+    .limit(1);
+  return Boolean(rows[0]?.flag);
+}
+
 /** displayName(닉네임) 중복 여부 — true 면 사용 가능. */
 export async function isDisplayNameAvailable(displayName: string): Promise<boolean> {
   const rows = await db
@@ -302,7 +312,11 @@ export async function changePassword(
   const newHash = await hashPassword(input.newPassword);
   await db
     .update(userLocalCredentials)
-    .set({ passwordHash: newHash, passwordUpdatedAt: new Date() })
+    .set({
+      passwordHash: newHash,
+      passwordUpdatedAt: new Date(),
+      mustChangePassword: false,
+    })
     .where(eq(userLocalCredentials.id, cred.id));
 
   // 전 세션 무효화 — tokenVersion bump
@@ -315,4 +329,141 @@ export async function changePassword(
     .update(refreshTokens)
     .set({ revoked: true, revokedAt: new Date() })
     .where(and(eq(refreshTokens.userId, userId), eq(refreshTokens.revoked, false)));
+}
+
+/**
+ * 회원 탈퇴 — soft delete + PII anonymization.
+ *
+ *   1) 자체 로그인 계정이면 password 재검증 (실수 방지).
+ *   2) user.status = "deleted" + displayName / dnfProfile / viewer* 익명화.
+ *   3) tokenVersion bump → 기존 access token 즉시 무효.
+ *   4) user_local_credentials (username + passwordHash) 삭제 → username 재사용 가능.
+ *   5) user_oauth_accounts 삭제 → 외부 연동 해제.
+ *   6) refresh_tokens 모두 revoke.
+ *
+ * 작성한 posts / comments 의 authorId 는 유지 (leftJoin 으로 displayName=(탈퇴 회원) 노출).
+ * 완전 익명이 필요하면 어드민이 추가 hard delete 가능 (cascade ON DELETE SET NULL).
+ */
+export async function deleteOwnAccount(
+  userId: string,
+  input: { password?: string },
+): Promise<void> {
+  const userRows = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const user = userRows[0];
+  if (!user) throw AppError.notFound("계정을 찾을 수 없습니다.", "user_not_found");
+  if (user.status === "deleted") {
+    throw AppError.badRequest("이미 탈퇴된 계정입니다.", "already_deleted");
+  }
+
+  // local credentials 있으면 password 재검증 필수
+  const { userLocalCredentials, userOauthAccounts } = await import("./schema.js");
+  const credRows = await db
+    .select()
+    .from(userLocalCredentials)
+    .where(eq(userLocalCredentials.userId, userId))
+    .limit(1);
+  const cred = credRows[0];
+
+  if (cred) {
+    if (!input.password) {
+      throw AppError.badRequest("비밀번호를 입력해 주세요.", "password_required");
+    }
+    const ok = await verifyPassword(input.password, cred.passwordHash);
+    if (!ok) {
+      throw AppError.unauthorized("비밀번호가 올바르지 않습니다.", "invalid_password");
+    }
+  }
+  // OAuth-only 계정은 password 검증 없이 진행 (이미 access token 통과 + cookie 검증)
+
+  // 1) credentials 삭제 — username 재사용 가능하게
+  if (cred) {
+    await db.delete(userLocalCredentials).where(eq(userLocalCredentials.id, cred.id));
+  }
+  // 2) OAuth 연동 모두 해제
+  await db.delete(userOauthAccounts).where(eq(userOauthAccounts.userId, userId));
+  // 3) refresh 모두 revoke (cascade delete 도 가능하지만 audit 보존 위해 revoke)
+  await db
+    .update(refreshTokens)
+    .set({ revoked: true, revokedAt: new Date() })
+    .where(and(eq(refreshTokens.userId, userId), eq(refreshTokens.revoked, false)));
+
+  // 4) user row 익명화 + status=deleted + tokenVersion bump
+  const anonName = `(탈퇴) ${user.id.slice(0, 6)}`;
+  await db
+    .update(users)
+    .set({
+      status: "deleted",
+      displayName: anonName.slice(0, 32),
+      email: null,
+      avatarR2Key: null,
+      dnfProfile: null,
+      viewerPlatform: null,
+      viewerNickname: null,
+      tokenVersion: user.tokenVersion + 1,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, userId));
+}
+
+/**
+ * super 권한 — 자체 가입자 비밀번호 reset.
+ *
+ *   1) username → user_local_credentials 조회 (없으면 not_found)
+ *   2) 12자 임시 비번 생성 (영문대문자/소문자/숫자)
+ *   3) 해시 교체 + mustChangePassword=true + tokenVersion bump → 전 세션 무효
+ *   4) refresh_tokens 모두 revoke
+ *   5) 임시 비번 plain text 반환 — caller(super)가 사용자에게 OOB 전달
+ *
+ * 사용자는 이 임시 비번으로 로그인 후 /profile/password 강제 redirect 됨.
+ */
+export async function adminResetPassword(
+  username: string,
+): Promise<{ tempPassword: string; userId: string; displayName: string }> {
+  const credRows = await db
+    .select()
+    .from(userLocalCredentials)
+    .where(eq(userLocalCredentials.username, username))
+    .limit(1);
+  const cred = credRows[0];
+  if (!cred) {
+    throw AppError.notFound("해당 아이디의 자체 가입 계정이 없습니다.", "user_not_found");
+  }
+
+  const userRows = await db.select().from(users).where(eq(users.id, cred.userId)).limit(1);
+  const user = userRows[0];
+  if (!user) throw AppError.internal("user missing for credentials");
+  if (user.status !== "active") {
+    throw AppError.badRequest("비활성 계정은 reset 불가합니다.", "account_inactive");
+  }
+
+  // 12자 임시 비번 — bcrypt 안전 문자만 (특수문자 제외 — 4자 정책 + 안내 메시지 단순화)
+  const charset = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const bytes = randomBytes(12);
+  let tempPassword = "";
+  for (let i = 0; i < 12; i++) {
+    const b = bytes[i] ?? 0;
+    tempPassword += charset[b % charset.length];
+  }
+
+  const newHash = await hashPassword(tempPassword);
+  await db
+    .update(userLocalCredentials)
+    .set({
+      passwordHash: newHash,
+      passwordUpdatedAt: new Date(),
+      mustChangePassword: true,
+    })
+    .where(eq(userLocalCredentials.id, cred.id));
+
+  // tokenVersion bump → 기존 세션 모두 무효
+  await db
+    .update(users)
+    .set({ tokenVersion: user.tokenVersion + 1 })
+    .where(eq(users.id, user.id));
+  await db
+    .update(refreshTokens)
+    .set({ revoked: true, revokedAt: new Date() })
+    .where(and(eq(refreshTokens.userId, user.id), eq(refreshTokens.revoked, false)));
+
+  return { tempPassword, userId: user.id, displayName: user.displayName };
 }

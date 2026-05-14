@@ -104,6 +104,9 @@ export const userLocalCredentials = pgTable(
     passwordUpdatedAt: timestamp("password_updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // super 가 비밀번호 reset 한 경우 true. 다음 로그인 시 /profile/password 강제 redirect.
+    // 사용자가 새 비밀번호로 변경 후 false 로 reset 됨.
+    mustChangePassword: boolean("must_change_password").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

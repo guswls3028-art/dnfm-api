@@ -24,6 +24,11 @@ export const localSignupDto = z.object({
       characterSelect: z.string().max(512).optional(),
     })
     .optional(),
+  // 약관/개인정보처리방침 동의 — 필수.
+  // 본문 변경 시 server-side 검증으로 새 가입자는 강제 동의시킴.
+  acceptedTerms: z.literal(true, {
+    errorMap: () => ({ message: "약관 및 개인정보처리방침에 동의해 주세요." }),
+  }),
 });
 export type LocalSignupInput = z.infer<typeof localSignupDto>;
 
@@ -52,8 +57,27 @@ export type ViewerPlatform = (typeof viewerPlatforms)[number];
 /** 프로필 수정. */
 export const updateProfileDto = z.object({
   displayName: z.string().trim().min(1).max(32).optional(),
+  // R2 key (avatars/<uuid>.jpg 등). null = 아바타 제거.
+  avatarR2Key: z.string().max(512).nullable().optional(),
   dnfProfile: dnfProfileSchema.optional(),
   viewerPlatform: viewerPlatformSchema.nullable().optional(),
   viewerNickname: z.string().trim().min(1).max(32).nullable().optional(),
 });
 export type UpdateProfileInput = z.infer<typeof updateProfileDto>;
+
+/** 회원 탈퇴 — 본인 비밀번호 재확인 필요 (자체 가입자). OAuth-only 계정은 password 생략. */
+export const deleteAccountDto = z.object({
+  password: z.string().min(1).max(128).optional(),
+});
+export type DeleteAccountInput = z.infer<typeof deleteAccountDto>;
+
+/** super 권한 — 자체 가입자 비밀번호 reset. username 으로 식별. 임시 비번 리턴. */
+export const adminResetPasswordDto = z.object({
+  username: z
+    .string()
+    .trim()
+    .min(3)
+    .max(32)
+    .regex(/^[a-zA-Z0-9_]+$/),
+});
+export type AdminResetPasswordInput = z.infer<typeof adminResetPasswordDto>;

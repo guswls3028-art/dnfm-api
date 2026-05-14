@@ -7,6 +7,7 @@ describe("localSignupDto", () => {
       username: "newb_user1",
       password: "1234",
       displayName: "뉴비",
+      acceptedTerms: true,
     });
     expect(r.success).toBe(true);
   });
@@ -15,6 +16,7 @@ describe("localSignupDto", () => {
       username: "newb user!", // space + bang invalid
       password: "1234",
       displayName: "뉴비",
+      acceptedTerms: true,
     });
     expect(r.success).toBe(false);
   });
@@ -23,6 +25,24 @@ describe("localSignupDto", () => {
       username: "abc",
       password: "1",
       displayName: "x",
+      acceptedTerms: true,
+    });
+    expect(r.success).toBe(false);
+  });
+  it("rejects signup without terms acceptance", () => {
+    const r = localSignupDto.safeParse({
+      username: "newb_user1",
+      password: "1234",
+      displayName: "뉴비",
+    });
+    expect(r.success).toBe(false);
+  });
+  it("rejects signup with explicit false terms", () => {
+    const r = localSignupDto.safeParse({
+      username: "newb_user1",
+      password: "1234",
+      displayName: "뉴비",
+      acceptedTerms: false,
     });
     expect(r.success).toBe(false);
   });
