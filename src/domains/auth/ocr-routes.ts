@@ -477,8 +477,8 @@ async function handleOcrAuto(c: Context) {
   if (files.length === 0) {
     throw AppError.badRequest("이미지 파일이 없습니다.", "image_required");
   }
-  if (files.length > 5) {
-    throw AppError.badRequest("한 번에 최대 5장까지 업로드 가능합니다.", "too_many_images");
+  if (files.length > 20) {
+    throw AppError.badRequest("한 번에 최대 20장까지 업로드 가능합니다.", "too_many_images");
   }
   for (const f of files) {
     if (f.size > 10 * 1024 * 1024) {
