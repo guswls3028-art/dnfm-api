@@ -49,6 +49,7 @@ export const updatePostDto = z.object({
   flair: z.string().trim().max(32).optional().nullable(),
   pinned: z.boolean().optional(), // admin only
   locked: z.boolean().optional(), // admin only
+  attachmentR2Keys: z.array(z.string().max(512)).max(20).optional(),
   guestPassword: z.string().min(1).max(128).optional(), // 비회원 본인 검증용
 });
 export type UpdatePostInput = z.infer<typeof updatePostDto>;

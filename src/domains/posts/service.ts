@@ -14,6 +14,7 @@ import type {
   ListPostsQuery,
   UpdatePostInput,
 } from "./dto.js";
+import { users } from "../auth/schema.js";
 import { type PostVoteType, postCategories, postVotes, posts } from "./schema.js";
 
 export type RequestContext = {
@@ -208,14 +209,27 @@ export async function getPostById(site: SiteCode, id: string) {
         slug: postCategories.slug,
         name: postCategories.name,
       },
+      author: {
+        id: users.id,
+        displayName: users.displayName,
+        dnfProfile: users.dnfProfile,
+        viewerPlatform: users.viewerPlatform,
+        viewerNickname: users.viewerNickname,
+      },
     })
     .from(posts)
     .leftJoin(postCategories, eq(posts.categoryId, postCategories.id))
+    .leftJoin(users, eq(posts.authorId, users.id))
     .where(and(eq(posts.site, site), eq(posts.id, id), isNull(posts.deletedAt)))
     .limit(1);
   const row = rows[0];
   if (!row) throw AppError.notFound("글을 찾을 수 없습니다.", "post_not_found");
-  return enrichPost(row.post, row.category?.id ? row.category : null);
+  return {
+    ...enrichPost(row.post, row.category?.id ? row.category : null),
+    // 회원 게시글일 때만 author 객체 — AuthorCard 가 dnfProfile 등 표시.
+    // 비회원 글은 author=null (frontend 가 authorNickname 으로 폴백).
+    author: row.author?.id ? row.author : null,
+  };
 }
 
 /** view_count 증가 — fire and forget OK. */
@@ -385,6 +399,9 @@ export async function updatePost(
       ...(input.flair !== undefined && { flair: input.flair }),
       ...(input.pinned !== undefined && { pinned: input.pinned }),
       ...(input.locked !== undefined && { locked: input.locked }),
+      ...(input.attachmentR2Keys !== undefined && {
+        attachmentR2Keys: input.attachmentR2Keys,
+      }),
       updatedAt: new Date(),
     })
     .where(eq(posts.id, postId))
