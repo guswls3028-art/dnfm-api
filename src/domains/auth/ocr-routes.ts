@@ -58,6 +58,10 @@ interface GeminiCandidate {
   content?: { parts?: Array<{ text?: string }> };
 }
 
+const AUTO_GEMINI_TIMEOUT_MS = 60_000;
+const AUTO_GEMINI_MAX_CONCURRENCY = 2;
+const AUTO_GEMINI_MAX_ATTEMPTS = 2;
+
 async function callGemini(
   type: DnfOcrCaptureType,
   buffer: Buffer,
@@ -82,7 +86,7 @@ async function callGemini(
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
   const _ac = new AbortController();
-  const _to = setTimeout(() => _ac.abort(), 45_000);
+  const _to = setTimeout(() => _ac.abort(), AUTO_GEMINI_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -506,12 +510,14 @@ async function handleOcrAuto(c: Context) {
       source: "mock",
     });
   }
-  const perImage = await Promise.all(
-    files.map(async (f, i) => {
+  const perImage = await mapWithConcurrency(
+    files,
+    AUTO_GEMINI_MAX_CONCURRENCY,
+    async (f, i) => {
       const buffer = Buffer.from(await f.arrayBuffer());
       const mime = f.type || "image/jpeg";
-      return autoClassifyAndExtract(buffer, mime, i, f.name);
-    }),
+      return autoClassifyAndExtractWithRetry(buffer, mime, i, f.name);
+    },
   );
   const merged = mergeAutoResults(perImage);
   return ok(c, { merged, perImage, source: "gemini" });
@@ -739,7 +745,9 @@ const AUTO_PROMPT =
   "   basicInfo.mainCharacterClass (같은 박스 직업명)\n" +
   "B) screenType='character_list' — 모험단→보유캐릭터. characters[] 추출 (name+klass).\n" +
   "C) screenType='character_select' — 로그인 직후 캐릭터 선택창. characters[] 추출.\n" +
-  "둘 다 아니면 'unknown'. 항마력 절대 추출 X. 레벨/서버/길드/UI 라벨 제외.";
+  "   character_select 에서는 각 캐릭터 아래 'Lv.85 이름'의 이름을 name, 그 바로 아래 줄을 klass 로 추출.\n" +
+  "   화면 상단의 모험단 레벨, 이벤트 문구, 항마력 숫자, 배경 텍스트는 제외.\n" +
+  "직업 변경/직업표 화면처럼 실제 보유 캐릭터 이름이 없으면 'unknown'. 항마력 절대 추출 X. 레벨/서버/길드/UI 라벨 제외.";
 
 const AUTO_RESPONSE_SCHEMA = {
   type: "object",
@@ -790,7 +798,7 @@ async function autoClassifyAndExtract(
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
   const _ac = new AbortController();
-  const _to = setTimeout(() => _ac.abort(), 45_000);
+  const _to = setTimeout(() => _ac.abort(), AUTO_GEMINI_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -859,6 +867,60 @@ async function autoClassifyAndExtract(
     return { index, fileName, screenType, characters, raw: rawJson };
   }
   return { index, fileName, screenType: "unknown", raw: rawJson };
+}
+
+function isRetryableAutoError(result: AutoPerImage): boolean {
+  return Boolean(
+    result.error === "gemini_timeout_or_network" ||
+      result.error === "parse_failed" ||
+      result.error === "gemini_429" ||
+      result.error === "gemini_500" ||
+      result.error === "gemini_502" ||
+      result.error === "gemini_503" ||
+      result.error === "gemini_504",
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function autoClassifyAndExtractWithRetry(
+  buffer: Buffer,
+  mime: string,
+  index: number,
+  fileName: string,
+): Promise<AutoPerImage> {
+  let last: AutoPerImage | undefined;
+  for (let attempt = 1; attempt <= AUTO_GEMINI_MAX_ATTEMPTS; attempt += 1) {
+    const result = await autoClassifyAndExtract(buffer, mime, index, fileName);
+    if (!isRetryableAutoError(result)) return result;
+    last = result;
+    logger.warn({ fileName, attempt, error: result.error }, "ocr.auto retryable failure");
+    if (attempt < AUTO_GEMINI_MAX_ATTEMPTS) await sleep(600 * attempt);
+  }
+  return last ?? { index, fileName, screenType: "unknown", error: "ocr_auto_failed" };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const current = nextIndex;
+      nextIndex += 1;
+      results[current] = await mapper(items[current] as T, current);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }
 
 function mergeAutoResults(perImage: AutoPerImage[]): AutoMerged {
