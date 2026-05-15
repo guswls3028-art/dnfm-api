@@ -32,6 +32,7 @@ export function createApp() {
   app.use("*", errorsMiddleware);
 
   // health
+  app.get("/health", (c) => ok(c, { status: "ok", ts: new Date().toISOString() }));
   app.get("/healthz", (c) => ok(c, { status: "ok", ts: new Date().toISOString() }));
   app.get("/readyz", (c) => ok(c, { status: "ready" }));
 

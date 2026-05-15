@@ -14,7 +14,7 @@ import { users } from "../auth/schema.js";
 import { SITE_CODES } from "../../shared/types/site.js";
 
 /**
- * 콘테스트 ([[allow]] 핵심 기능, [[newb]] 도 향후 활용 가능).
+ * 콘테스트 ([[hurock]] 핵심 기능, [[newb]] 도 향후 활용 가능).
  *
  *   contests          어드민이 생성. 마감/투표 기간 시스템 시계 기준.
  *   contest_entries   회원이 참가 글 + 사진 등록. 마감 후엔 새 entry 거부.

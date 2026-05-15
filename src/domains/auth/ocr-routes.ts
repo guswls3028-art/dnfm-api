@@ -26,7 +26,7 @@ import { logger } from "../../config/logger.js";
  * 흐름:
  *   1. POST /auth/dnf-profile/ocr/:type  (multipart 이미지)
  *      → Vision 으로 텍스트 추출 + 타입별 후처리 → DnfOcrResult 반환.
- *      → 운영 키 없으면 mock 반환 (응답에 source: "mock" 표시).
+ *      → OCR provider 미설정이면 503. 개발 mock 은 OCR_MOCK_ENABLED=true 일 때만 반환.
  *   2. (반복 가능) 3종 캡처 — basic_info / character_list / character_select
  *   3. POST /auth/dnf-profile/confirm  (JSON — 사용자 보정한 결과)
  *      → user.dnf_profile 업데이트 + verifiedBySelectScreen 결정.
@@ -43,7 +43,7 @@ const ocrRoutes = new Hono();
 /*      Cloud Vision 대비 ~30배 저렴. multimodal 이라 type 별 prompt 분기.    */
 /*   2. Cloud Vision REST API (env.GOOGLE_VISION_API_KEY) — raw text + 후처리. */
 /*   3. Cloud Vision SDK (env.GOOGLE_APPLICATION_CREDENTIALS) — 동일 후처리.   */
-/*   4. mock — 키 모두 미설정.                                                 */
+/*   4. dev mock — OCR_MOCK_ENABLED=true 인 로컬 확인용.                       */
 /* -------------------------------------------------------------------------- */
 
 interface VisionTextResult {
@@ -298,6 +298,10 @@ function isAnyOcrConfigured(): boolean {
   return isGeminiConfigured() || isVisionConfigured();
 }
 
+function isOcrMockEnabled(): boolean {
+  return env.OCR_MOCK_ENABLED;
+}
+
 async function runVision(buffer: Buffer): Promise<VisionTextResult> {
   if (env.GOOGLE_VISION_API_KEY) {
     return callVisionViaApiKey(buffer.toString("base64"));
@@ -442,7 +446,7 @@ async function readImage(c: Context): Promise<{ buffer: Buffer; mime: string }> 
 }
 
 /* -------------------------------------------------------------------------- */
-/* mock — 키 미설정 시                                                        */
+/* dev mock — 명시적으로 켠 경우에만                                          */
 /* -------------------------------------------------------------------------- */
 
 function buildMockResult(type: DnfOcrCaptureType): DnfOcrResult {
@@ -500,6 +504,12 @@ async function handleOcrAuto(c: Context) {
     }
   }
   if (!env.GEMINI_API_KEY) {
+    if (!isOcrMockEnabled()) {
+      throw AppError.serviceUnavailable(
+        "OCR provider 가 설정되지 않았습니다. GEMINI_API_KEY 또는 GOOGLE_VISION_API_KEY 를 설정해 주세요.",
+        "ocr_provider_not_configured",
+      );
+    }
     return ok(c, {
       merged: buildAutoMock(),
       perImage: files.map((f, i) => ({
@@ -557,6 +567,12 @@ ocrRoutes.post("/ocr/:type",
   const type = parsed.data;
 
   if (!isAnyOcrConfigured()) {
+    if (!isOcrMockEnabled()) {
+      throw AppError.serviceUnavailable(
+        "OCR provider 가 설정되지 않았습니다. GEMINI_API_KEY 또는 GOOGLE_VISION_API_KEY 를 설정해 주세요.",
+        "ocr_provider_not_configured",
+      );
+    }
     const mock = buildMockResult(type);
     return ok(c, { result: mock, source: "mock" });
   }

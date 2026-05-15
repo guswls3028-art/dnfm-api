@@ -4,7 +4,7 @@ import { SITE_CODES, SITE_ROLES } from "../../shared/types/site.js";
 
 /**
  * user_site_roles — 사이트별 권한.
- * 같은 user 가 newb 에서 admin, allow 에서 member 일 수 있음.
+ * 같은 user 가 newb 에서 admin, hurock 에서 member 일 수 있음.
  * super 는 한 row 로 모든 사이트 권한 우회 (site = "*"). 별도 처리.
  *
  * (user_id, site) unique — 한 사용자는 사이트당 1 row.

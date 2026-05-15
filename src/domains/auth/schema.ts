@@ -14,7 +14,7 @@ import {
 
 /**
  * users — 플랫폼 통합 계정.
- *   - 두 사이트 (newb / allow) 가 같은 회원 풀을 공유.
+ *   - 두 사이트 (newb / hurock) 가 같은 회원 풀을 공유.
  *   - 사이트별 역할은 [[site_membership.schema]] 의 user_site_roles 에서.
  *   - 인증 방식 (local / google / kakao) 은 각각 별도 테이블 (1:N).
  *

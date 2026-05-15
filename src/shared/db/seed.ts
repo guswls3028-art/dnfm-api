@@ -2,7 +2,7 @@
  * seed — idempotent. 운영 카테고리 SSOT.
  *
  * 매 deploy 시 `pnpm db:seed` 호출해도 안전 (upsert).
- * 사이트별 카테고리는 운영 정책상 frontend mock 과 일치하게 박음.
+ * 사이트별 카테고리는 운영 정책상 frontend 노출 카테고리와 일치하게 박음.
  * 신규 카테고리 추가 시 여기와 frontend content 양쪽 sync.
  */
 import "@/shared/http/hono-env.js";

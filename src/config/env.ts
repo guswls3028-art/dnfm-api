@@ -53,12 +53,16 @@ const envSchema = z.object({
         .map((s) => s.trim())
         .filter(Boolean),
     )
-    .default("newb,allow"),
+    .default("newb,hurock"),
 
   // 던파 OCR — Gemini Flash 가 1순위 (~10배 저렴), Vision 은 fallback
   GEMINI_API_KEY: z.string().optional().default(""),
   GOOGLE_APPLICATION_CREDENTIALS: z.string().optional().default(""),
   GOOGLE_VISION_API_KEY: z.string().optional().default(""),
+  OCR_MOCK_ENABLED: z
+    .string()
+    .transform((v) => v === "true")
+    .default("false"),
 
   // OAuth (Stage 2)
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional().default(""),

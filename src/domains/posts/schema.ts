@@ -16,7 +16,7 @@ import { SITE_CODES } from "../../shared/types/site.js";
  * 게시판 — 디시 던모갤 구조를 reference 로 (구조만 빌림, 톤은 자체).
  *
  * 계층:
- *   site (newb / allow)
+ *   site (newb / hurock)
  *     └── post_categories (큰 분류 — 자유 / 질문 / 공지 등. 사이트별 정의)
  *           └── posts
  *                 └── flair      (말머리 — 카테고리 안의 글 자체 분류. 단일)

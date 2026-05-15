@@ -64,7 +64,7 @@ export type DeletePostInput = z.infer<typeof deletePostDto>;
 /** 글 list 쿼리. */
 export const listPostsQuery = z.object({
   categoryId: z.string().uuid().optional(),
-  // categoryId 의 대체 — slug 로도 필터 가능. frontend 가 mock 카테고리에서 동적 fetch
+  // categoryId 의 대체 — slug 로도 필터 가능. frontend 가 카테고리를 동적 fetch
   // 로 전환되는 동안 호환. 둘 다 오면 categoryId 우선.
   categorySlug: z
     .string()
