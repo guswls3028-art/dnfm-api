@@ -81,11 +81,21 @@ async function callGemini(
     },
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const _ac = new AbortController();
+  const _to = setTimeout(() => _ac.abort(), 45_000);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: _ac.signal,
+    });
+  } catch (e) {
+    clearTimeout(_to);
+    throw AppError.internal(`Gemini API timeout/network: ${(e as Error).message}`, "gemini_timeout");
+  }
+  clearTimeout(_to);
   if (!res.ok) {
     const text = await res.text();
     throw AppError.internal(`Gemini API 실패: ${res.status} ${text.slice(0, 200)}`);
@@ -779,11 +789,22 @@ async function autoClassifyAndExtract(
     },
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(env.GEMINI_API_KEY)}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const _ac = new AbortController();
+  const _to = setTimeout(() => _ac.abort(), 45_000);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: _ac.signal,
+    });
+  } catch (e) {
+    clearTimeout(_to);
+    logger.warn({ fileName, err: (e as Error).message }, "gemini auto fetch aborted/timeout");
+    return { index, fileName, screenType: "unknown", error: "gemini_timeout_or_network" };
+  }
+  clearTimeout(_to);
   if (!res.ok) {
     const text = await res.text();
     logger.warn({ status: res.status, text, fileName }, "gemini auto call failed");
