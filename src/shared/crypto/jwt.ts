@@ -31,11 +31,15 @@ export function signAccessToken(userId: string, tokenVersion: number): string {
   );
 }
 
-export function signRefreshToken(userId: string, jti: string): string {
+export function signRefreshToken(
+  userId: string,
+  jti: string,
+  ttlSeconds = env.JWT_REFRESH_TTL_SECONDS,
+): string {
   return jwt.sign(
     { sub: userId, typ: "refresh", jti } satisfies RefreshTokenPayload,
     env.JWT_REFRESH_SECRET,
-    { expiresIn: env.JWT_REFRESH_TTL_SECONDS },
+    { expiresIn: ttlSeconds },
   );
 }
 

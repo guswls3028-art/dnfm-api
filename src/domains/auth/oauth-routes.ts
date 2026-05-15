@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { db } from "../../shared/db/client.js";
 import {
   users,
+  userLocalCredentials,
   userOauthAccounts,
   oauthProviders,
   type OAuthProvider,
@@ -16,16 +17,20 @@ import { env } from "../../config/env.js";
 import { AppError } from "../../shared/errors/app-error.js";
 import { logger } from "../../config/logger.js";
 import { SITE_CODES, type SiteCode } from "../../shared/types/site.js";
+import { optionalAuth, requireAuth } from "../../shared/http/middleware/auth.js";
 
 /**
  * OAuth (Google / Kakao) — same flow:
  *   GET  /auth/oauth/:provider/start     → 302 redirect to provider authorize URL
  *   GET  /auth/oauth/:provider/callback  → exchange code → userinfo → upsert user → cookies
  *
- * Linking policy:
+ * Login policy:
  *   - (provider, providerUserId) 매칭되는 oauth_account 있으면 그 user 로 로그인
- *   - 없고 providerEmail 이 기존 user.email 과 일치 → 그 user 에 자동 link
- *   - 둘 다 없으면 신규 user 생성 + oauth_account 발급
+ *   - 없으면 신규 user 생성 + oauth_account 발급
+ *
+ * Linking policy:
+ *   - 로그인 상태에서 mode=link 로 시작한 callback 만 기존 user 에 provider 를 붙인다.
+ *   - 이메일 자동 link 는 하지 않는다.
  *
  * CSRF: 단순 random hex state 를 cookie 에 저장, callback 에서 비교.
  * 키 미설정 시 endpoint 가 503 + 명확한 메시지 반환.
@@ -57,6 +62,9 @@ interface OAuthStatePayload {
   csrf: string;
   site: SiteCode;
   returnTo: string;
+  mode?: "login" | "link";
+  rememberMe?: boolean;
+  linkUserId?: string;
 }
 
 function encodeStateCookie(payload: OAuthStatePayload): string {
@@ -74,10 +82,28 @@ function decodeStateCookie(raw: string | undefined): OAuthStatePayload | null {
       csrf: obj.csrf,
       site: obj.site,
       returnTo: safeReturnTo(obj.returnTo),
+      mode: obj.mode === "link" ? "link" : "login",
+      rememberMe: obj.rememberMe === false ? false : true,
+      linkUserId: typeof obj.linkUserId === "string" ? obj.linkUserId : undefined,
     };
   } catch {
     return null;
   }
+}
+
+function parseRememberMe(raw: string | undefined | null): boolean {
+  if (!raw) return true;
+  const normalized = raw.toLowerCase();
+  return normalized !== "0" && normalized !== "false" && normalized !== "off";
+}
+
+function appendQuery(path: string, query: Record<string, string>): string {
+  const [pathname, rawSearch = ""] = path.split("?");
+  const safePathname = pathname || "/";
+  const params = new URLSearchParams(rawSearch);
+  for (const [key, value] of Object.entries(query)) params.set(key, value);
+  const s = params.toString();
+  return s ? `${safePathname}?${s}` : safePathname;
 }
 
 function buildRedirect(
@@ -93,6 +119,16 @@ function redirectToFrontendError(c: Context, site: SiteCode, code: string): Resp
   // returnTo 정보는 state cookie 안에 들어있는데 fail 시 그 자체가 의심스러우니
   // /login?oauth_error=... 로만 유도. 사용자가 다시 시도하면 정상 path.
   const url = buildRedirect(site, `/login?oauth_error=${encodeURIComponent(code)}`);
+  return c.redirect(url, 302);
+}
+
+function redirectToFrontendPathError(
+  c: Context,
+  site: SiteCode,
+  path: string,
+  code: string,
+): Response {
+  const url = buildRedirect(site, appendQuery(safeReturnTo(path), { oauth_error: code }));
   return c.redirect(url, 302);
 }
 
@@ -291,6 +327,70 @@ async function upsertOauthUser(
   });
 }
 
+async function linkOauthAccountToUser(
+  userId: string,
+  provider: OAuthProvider,
+  profile: NormalizedProfile,
+  raw: Record<string, unknown>,
+): Promise<User> {
+  if (!profile.providerUserId) {
+    throw AppError.unauthorized("OAuth providerUserId 누락", "oauth_user_id_missing");
+  }
+
+  const userRows = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const user = userRows[0];
+  if (!user || user.status !== "active") {
+    throw AppError.unauthorized("계정을 사용할 수 없습니다.", "account_inactive");
+  }
+
+  const existingProviderUser = await db
+    .select()
+    .from(userOauthAccounts)
+    .where(
+      and(
+        eq(userOauthAccounts.provider, provider),
+        eq(userOauthAccounts.providerUserId, profile.providerUserId),
+      ),
+    )
+    .limit(1);
+  const matchedAccount = existingProviderUser[0];
+  if (matchedAccount && matchedAccount.userId !== userId) {
+    throw AppError.conflict(
+      "이미 다른 계정에 연동된 소셜 계정입니다.",
+      "oauth_account_already_linked",
+    );
+  }
+  if (matchedAccount) {
+    await db
+      .update(userOauthAccounts)
+      .set({ lastLoginAt: new Date(), providerProfile: raw, providerEmail: profile.email ?? null })
+      .where(eq(userOauthAccounts.id, matchedAccount.id));
+    return user;
+  }
+
+  const existingProviderForUser = await db
+    .select()
+    .from(userOauthAccounts)
+    .where(and(eq(userOauthAccounts.userId, userId), eq(userOauthAccounts.provider, provider)))
+    .limit(1);
+  if (existingProviderForUser[0]) {
+    throw AppError.conflict(
+      "이 계정에는 이미 같은 소셜 제공자가 연동되어 있습니다.",
+      "oauth_provider_already_linked",
+    );
+  }
+
+  await db.insert(userOauthAccounts).values({
+    userId,
+    provider,
+    providerUserId: profile.providerUserId,
+    providerEmail: profile.email,
+    providerProfile: raw,
+    lastLoginAt: new Date(),
+  });
+  return user;
+}
+
 /* -------------------------------------------------------------------------- */
 /* cookie helpers                                                             */
 /* -------------------------------------------------------------------------- */
@@ -310,7 +410,7 @@ function setAuthCookies(c: Parameters<typeof setCookie>[0], tokens: AuthTokens) 
     sameSite: "Lax",
     domain: env.COOKIE_DOMAIN,
     path: "/auth",
-    expires: tokens.refreshExpiresAt,
+    ...(tokens.rememberMe ? { expires: tokens.refreshExpiresAt } : {}),
   });
 }
 
@@ -318,7 +418,7 @@ function setAuthCookies(c: Parameters<typeof setCookie>[0], tokens: AuthTokens) 
 /* GET /auth/oauth/:provider/start                                            */
 /* -------------------------------------------------------------------------- */
 
-oauthRoutes.get("/:provider/start", async (c) => {
+oauthRoutes.get("/:provider/start", optionalAuth(), async (c) => {
   const provider = parseProvider(c.req.param("provider"));
   const cfg = getProviderConfig(provider);
   if (!cfg) {
@@ -336,9 +436,23 @@ oauthRoutes.get("/:provider/start", async (c) => {
   // site / returnTo 쿼리 → state cookie 안에 묶어서 callback 에서 redirect target 결정.
   const site = parseSiteParam(c.req.query("site"));
   const returnTo = safeReturnTo(c.req.query("returnTo") ?? c.req.query("next"));
+  const mode = c.req.query("mode") === "link" ? "link" : "login";
+  const rememberMe = parseRememberMe(c.req.query("rememberMe"));
+  const actor = c.get("user");
+
+  if (mode === "link" && !actor) {
+    return redirectToFrontendError(c, site, "oauth_link_login_required");
+  }
 
   const csrf = randomBytes(16).toString("hex");
-  const cookieValue = encodeStateCookie({ csrf, site, returnTo });
+  const cookieValue = encodeStateCookie({
+    csrf,
+    site,
+    returnTo,
+    mode,
+    rememberMe,
+    linkUserId: mode === "link" ? actor?.id : undefined,
+  });
   setCookie(c, STATE_COOKIE_NAME, cookieValue, {
     httpOnly: true,
     secure: env.COOKIE_SECURE,
@@ -364,6 +478,47 @@ oauthRoutes.get("/:provider/start", async (c) => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* DELETE /auth/oauth/:provider/link                                          */
+/* -------------------------------------------------------------------------- */
+
+oauthRoutes.delete("/:provider/link", requireAuth(), async (c) => {
+  const provider = parseProvider(c.req.param("provider"));
+  const user = c.get("user");
+
+  const [localRows, oauthRows] = await Promise.all([
+    db
+      .select({ id: userLocalCredentials.id })
+      .from(userLocalCredentials)
+      .where(eq(userLocalCredentials.userId, user.id))
+      .limit(1),
+    db
+      .select({
+        id: userOauthAccounts.id,
+        provider: userOauthAccounts.provider,
+      })
+      .from(userOauthAccounts)
+      .where(eq(userOauthAccounts.userId, user.id)),
+  ]);
+
+  const target = oauthRows.find((row) => row.provider === provider);
+  if (!target) {
+    return c.json({ data: { ok: true, alreadyUnlinked: true } });
+  }
+
+  const hasLocal = localRows.length > 0;
+  const remainingOauthCount = oauthRows.filter((row) => row.id !== target.id).length;
+  if (!hasLocal && remainingOauthCount === 0) {
+    throw AppError.badRequest(
+      "마지막 로그인 수단은 해제할 수 없습니다.",
+      "last_auth_method",
+    );
+  }
+
+  await db.delete(userOauthAccounts).where(eq(userOauthAccounts.id, target.id));
+  return c.json({ data: { ok: true } });
+});
+
+/* -------------------------------------------------------------------------- */
 /* GET /auth/oauth/:provider/callback                                         */
 /* -------------------------------------------------------------------------- */
 
@@ -381,6 +536,8 @@ oauthRoutes.get("/:provider/callback", async (c) => {
   const decoded = decodeStateCookie(cookieRaw);
   const site = decoded?.site ?? "newb";
   const returnTo = decoded?.returnTo ?? "/";
+  const mode = decoded?.mode ?? "login";
+  const rememberMe = decoded?.rememberMe ?? true;
 
   // state cookie 즉시 삭제 (1회용) — fail 이든 success 든 동일.
   deleteCookie(c, STATE_COOKIE_NAME, { domain: env.COOKIE_DOMAIN, path: "/auth" });
@@ -420,15 +577,38 @@ oauthRoutes.get("/:provider/callback", async (c) => {
     const raw = (await userinfoRes.json()) as Record<string, unknown>;
     const profile = normalizeProviderProfile(provider, raw);
 
+    if (mode === "link") {
+      if (!decoded?.linkUserId) {
+        return redirectToFrontendPathError(c, site, returnTo, "oauth_link_state_missing");
+      }
+      const linkedUser = await linkOauthAccountToUser(decoded.linkUserId, provider, profile, raw);
+      const tokens = await issueTokens(
+        linkedUser.id,
+        linkedUser.tokenVersion,
+        {
+          userAgent: c.req.header("user-agent") ?? undefined,
+          ipAddress: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
+        },
+        { rememberMe },
+      );
+      setAuthCookies(c, tokens);
+      return c.redirect(buildRedirect(site, appendQuery(returnTo, { linked: provider })), 302);
+    }
+
     const { user, isNew } = await upsertOauthUser(provider, profile, raw);
     if (user.status !== "active") {
       return redirectToFrontendError(c, site, "account_inactive");
     }
 
-    const tokens = await issueTokens(user.id, user.tokenVersion, {
-      userAgent: c.req.header("user-agent") ?? undefined,
-      ipAddress: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
-    });
+    const tokens = await issueTokens(
+      user.id,
+      user.tokenVersion,
+      {
+        userAgent: c.req.header("user-agent") ?? undefined,
+        ipAddress: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
+      },
+      { rememberMe },
+    );
     setAuthCookies(c, tokens);
 
     // 신규 OAuth 가입자 → /signup/setup (닉네임 등 설정).
@@ -438,6 +618,9 @@ oauthRoutes.get("/:provider/callback", async (c) => {
   } catch (err) {
     const code = err instanceof AppError ? err.code : "oauth_token_failed";
     logger.warn({ err, code, provider, site }, "oauth callback error");
+    if (mode === "link" && decoded) {
+      return redirectToFrontendPathError(c, site, returnTo, code ?? "oauth_token_failed");
+    }
     return redirectToFrontendError(c, site, code ?? "oauth_token_failed");
   }
 });

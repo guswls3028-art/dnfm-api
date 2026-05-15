@@ -1,7 +1,14 @@
 import { eq, and } from "drizzle-orm";
 import { createHash, randomBytes } from "node:crypto";
 import { db } from "@/shared/db/client.js";
-import { users, userLocalCredentials, refreshTokens, type User } from "./schema.js";
+import {
+  users,
+  userLocalCredentials,
+  refreshTokens,
+  userOauthAccounts,
+  type User,
+  type OAuthProvider,
+} from "./schema.js";
 import { hashPassword, verifyPassword, validatePasswordPolicy } from "@/shared/crypto/password.js";
 import { signAccessToken, signRefreshToken } from "@/shared/crypto/jwt.js";
 import { env } from "@/config/env.js";
@@ -13,6 +20,7 @@ export interface AuthTokens {
   refreshToken: string;
   accessExpiresAt: Date;
   refreshExpiresAt: Date;
+  rememberMe: boolean;
 }
 
 export interface AuthResult {
@@ -28,14 +36,19 @@ export async function issueTokens(
   userId: string,
   tokenVersion: number,
   meta: { userAgent?: string; ipAddress?: string },
+  options: { rememberMe?: boolean } = {},
 ): Promise<AuthTokens> {
+  const rememberMe = options.rememberMe !== false;
   const refreshRow = randomBytes(32).toString("hex"); // raw random — JWT 의 jti 로 사용
-  const refreshToken = signRefreshToken(userId, refreshRow);
+  const refreshTtlSeconds = rememberMe
+    ? env.JWT_REFRESH_TTL_SECONDS
+    : env.JWT_SESSION_REFRESH_TTL_SECONDS;
+  const refreshToken = signRefreshToken(userId, refreshRow, refreshTtlSeconds);
   const accessToken = signAccessToken(userId, tokenVersion);
 
   const now = new Date();
   const accessExpiresAt = new Date(now.getTime() + env.JWT_ACCESS_TTL_SECONDS * 1000);
-  const refreshExpiresAt = new Date(now.getTime() + env.JWT_REFRESH_TTL_SECONDS * 1000);
+  const refreshExpiresAt = new Date(now.getTime() + refreshTtlSeconds * 1000);
 
   await db.insert(refreshTokens).values({
     userId,
@@ -46,7 +59,7 @@ export async function issueTokens(
     expiresAt: refreshExpiresAt,
   });
 
-  return { accessToken, refreshToken, accessExpiresAt, refreshExpiresAt };
+  return { accessToken, refreshToken, accessExpiresAt, refreshExpiresAt, rememberMe };
 }
 
 /** username 중복 여부 — true 면 사용 가능. */
@@ -77,6 +90,37 @@ export async function getMustChangePassword(userId: string): Promise<boolean> {
     .where(eq(userLocalCredentials.userId, userId))
     .limit(1);
   return Boolean(rows[0]?.flag);
+}
+
+export async function getUserAuthProviders(userId: string): Promise<{
+  local: boolean;
+  oauth: Array<{
+    provider: OAuthProvider;
+    providerEmail: string | null;
+    linkedAt: Date;
+    lastLoginAt: Date | null;
+  }>;
+}> {
+  const [localRows, oauthRows] = await Promise.all([
+    db
+      .select({ id: userLocalCredentials.id })
+      .from(userLocalCredentials)
+      .where(eq(userLocalCredentials.userId, userId))
+      .limit(1),
+    db
+      .select({
+        provider: userOauthAccounts.provider,
+        providerEmail: userOauthAccounts.providerEmail,
+        linkedAt: userOauthAccounts.linkedAt,
+        lastLoginAt: userOauthAccounts.lastLoginAt,
+      })
+      .from(userOauthAccounts)
+      .where(eq(userOauthAccounts.userId, userId)),
+  ]);
+  return {
+    local: localRows.length > 0,
+    oauth: oauthRows,
+  };
 }
 
 /** displayName(닉네임) 중복 여부 — true 면 사용 가능. */
@@ -135,7 +179,9 @@ export async function localSignup(
     passwordHash,
   });
 
-  const tokens = await issueTokens(user.id, user.tokenVersion, meta);
+  const tokens = await issueTokens(user.id, user.tokenVersion, meta, {
+    rememberMe: input.rememberMe,
+  });
   return { user, tokens };
 }
 
@@ -166,7 +212,9 @@ export async function localLogin(
     throw AppError.forbidden("계정이 비활성화 상태입니다.", "account_inactive");
   }
 
-  const tokens = await issueTokens(user.id, user.tokenVersion, meta);
+  const tokens = await issueTokens(user.id, user.tokenVersion, meta, {
+    rememberMe: input.rememberMe,
+  });
   return { user, tokens };
 }
 
@@ -235,13 +283,17 @@ export async function rotateRefreshToken(
     throw AppError.unauthorized("세션이 만료됐습니다. 다시 로그인해 주세요.", "refresh_subject_mismatch");
   }
 
+  const issuedForMs = row.expiresAt.getTime() - row.createdAt.getTime();
+  const rememberMe =
+    issuedForMs > (env.JWT_SESSION_REFRESH_TTL_SECONDS + 60) * 1000;
+
   // 4) rotate — 기존 revoke + 새 발급
   await db
     .update(refreshTokens)
     .set({ revoked: true, revokedAt: new Date() })
     .where(eq(refreshTokens.id, row.id));
 
-  const tokens = await issueTokens(user.id, user.tokenVersion, meta);
+  const tokens = await issueTokens(user.id, user.tokenVersion, meta, { rememberMe });
   return { user, tokens };
 }
 

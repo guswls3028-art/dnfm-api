@@ -24,6 +24,7 @@ import {
   isDisplayNameAvailable,
   getLocalUsername,
   getMustChangePassword,
+  getUserAuthProviders,
   type AuthTokens,
 } from "./service.js";
 import { env } from "@/config/env.js";
@@ -54,7 +55,7 @@ function setAuthCookies(c: Parameters<typeof setCookie>[0], tokens: AuthTokens) 
     sameSite: "Lax",
     domain: env.COOKIE_DOMAIN,
     path: "/auth", // refresh 는 /auth/* 만 보냄
-    expires: tokens.refreshExpiresAt,
+    ...(tokens.rememberMe ? { expires: tokens.refreshExpiresAt } : {}),
   });
 }
 
@@ -66,8 +67,16 @@ function clearAuthCookies(c: Parameters<typeof deleteCookie>[0]) {
 function publicUser(
   user: User,
   username?: string | null,
-  extras?: { mustChangePassword?: boolean },
+  extras?: {
+    mustChangePassword?: boolean;
+    authProviders?: Awaited<ReturnType<typeof getUserAuthProviders>>;
+  },
 ) {
+  const authProviders = extras?.authProviders;
+  const linkedProviders = [
+    ...(authProviders?.local ? ["local"] : []),
+    ...((authProviders?.oauth ?? []).map((p) => p.provider)),
+  ];
   return {
     id: user.id,
     username: username ?? null,
@@ -77,6 +86,8 @@ function publicUser(
     viewerPlatform: user.viewerPlatform ?? null,
     viewerNickname: user.viewerNickname ?? null,
     mustChangePassword: extras?.mustChangePassword ?? false,
+    authProviders: authProviders ?? { local: Boolean(username), oauth: [] },
+    linkedProviders,
     createdAt: user.createdAt,
   };
 }
@@ -165,13 +176,14 @@ auth.post("/logout", async (c) => {
 auth.get("/me", optionalAuth(), async (c) => {
   const user = c.get("user");
   if (!user) return ok(c, { user: null, siteRoles: [] });
-  const [siteRoles, username, mustChangePassword] = await Promise.all([
+  const [siteRoles, username, mustChangePassword, authProviders] = await Promise.all([
     getAllUserSiteRoles(user.id),
     getLocalUsername(user.id),
     getMustChangePassword(user.id),
+    getUserAuthProviders(user.id),
   ]);
   return ok(c, {
-    user: { ...publicUser(user, username, { mustChangePassword }), siteRoles },
+    user: { ...publicUser(user, username, { mustChangePassword, authProviders }), siteRoles },
   });
 });
 
@@ -192,7 +204,18 @@ auth.post("/refresh", authRateLimit, async (c) => {
       ipAddress: c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined,
     });
     setAuthCookies(c, result.tokens);
-    return ok(c, { user: publicUser(result.user) });
+    const [username, mustChangePassword, authProviders, siteRoles] = await Promise.all([
+      getLocalUsername(result.user.id),
+      getMustChangePassword(result.user.id),
+      getUserAuthProviders(result.user.id),
+      getAllUserSiteRoles(result.user.id),
+    ]);
+    return ok(c, {
+      user: {
+        ...publicUser(result.user, username, { mustChangePassword, authProviders }),
+        siteRoles,
+      },
+    });
   } catch (err) {
     // refresh 실패 시 cookie 도 같이 정리
     clearAuthCookies(c);
@@ -208,11 +231,15 @@ auth.patch("/me", requireAuth(), zValidator("json", updateProfileDto), async (c)
   const user = c.get("user");
   const input = c.req.valid("json");
   const updated = await updateUserProfile(user.id, input);
-  const [siteRoles, username] = await Promise.all([
+  const [siteRoles, username, mustChangePassword, authProviders] = await Promise.all([
     getAllUserSiteRoles(updated.id),
     getLocalUsername(updated.id),
+    getMustChangePassword(updated.id),
+    getUserAuthProviders(updated.id),
   ]);
-  return ok(c, { user: { ...publicUser(updated, username), siteRoles } });
+  return ok(c, {
+    user: { ...publicUser(updated, username, { mustChangePassword, authProviders }), siteRoles },
+  });
 });
 
 /**

@@ -24,6 +24,7 @@ export const localSignupDto = z.object({
       characterSelect: z.string().max(512).optional(),
     })
     .optional(),
+  rememberMe: z.boolean().optional().default(true),
   // 약관/개인정보처리방침 동의 — 필수.
   // 본문 변경 시 server-side 검증으로 새 가입자는 강제 동의시킴.
   acceptedTerms: z.literal(true, {
@@ -36,6 +37,7 @@ export type LocalSignupInput = z.infer<typeof localSignupDto>;
 export const localLoginDto = z.object({
   username: z.string().trim().min(1).max(32),
   password: z.string().min(1).max(128),
+  rememberMe: z.boolean().optional().default(true),
 });
 export type LocalLoginInput = z.infer<typeof localLoginDto>;
 
