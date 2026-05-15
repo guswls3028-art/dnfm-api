@@ -60,7 +60,7 @@ interface GeminiCandidate {
 
 const AUTO_GEMINI_TIMEOUT_MS = 60_000;
 const AUTO_GEMINI_MAX_CONCURRENCY = 2;
-const AUTO_GEMINI_MAX_ATTEMPTS = 2;
+const AUTO_GEMINI_MAX_ATTEMPTS = 1;
 
 async function callGemini(
   type: DnfOcrCaptureType,
@@ -519,7 +519,24 @@ async function handleOcrAuto(c: Context) {
       return autoClassifyAndExtractWithRetry(buffer, mime, i, f.name);
     },
   );
-  const merged = mergeAutoResults(perImage);
+  let merged = mergeAutoResults(perImage);
+  if (needsAutoSalvage(merged)) {
+    const salvageIndexes = perImage
+      .map((result, index) => ({ result, index }))
+      .filter(({ result }) => Boolean(result.error) || result.screenType === "unknown")
+      .sort((a, b) => Number(Boolean(b.result.error)) - Number(Boolean(a.result.error)))
+      .map(({ index }) => index);
+
+    for (const index of salvageIndexes) {
+      if (!needsAutoSalvage(merged)) break;
+      const file = files[index] as File;
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const mime = file.type || "image/jpeg";
+      const retry = await autoClassifyAndExtractWithRetry(buffer, mime, index, file.name);
+      perImage[index] = retry;
+      merged = mergeAutoResults(perImage);
+    }
+  }
   return ok(c, { merged, perImage, source: "gemini" });
 }
 
@@ -951,6 +968,10 @@ function mergeAutoResults(perImage: AutoPerImage[]): AutoMerged {
     characters: uniqueChars,
     verifiedBySelectScreen: verified,
   };
+}
+
+function needsAutoSalvage(merged: AutoMerged): boolean {
+  return !merged.adventurerName || !merged.mainCharacterName || !merged.verifiedBySelectScreen;
 }
 
 function buildAutoMock(): AutoMerged {
