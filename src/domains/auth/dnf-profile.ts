@@ -53,11 +53,14 @@ export const dnfProfileSchema = z.object({
   mainCharacterName: z.string().trim().min(1).max(32).optional(),
   /** 대표 캐릭터 직업명 — basic_info '대표 캐릭터' 박스 (예: 오버마인드, 세라핌). */
   mainCharacterClass: z.string().trim().min(1).max(32).optional(),
+  /** 대표 캐릭터 계열 — 동명 직업 disambiguation 용 (예: 거너(여)). */
+  mainCharacterClassGroup: z.string().trim().min(1).max(32).optional(),
   characters: z
     .array(
       z.object({
         name: z.string().trim().min(1).max(32),
         klass: z.string().trim().min(1).max(32),
+        classGroup: z.string().trim().min(1).max(32).optional(),
       }),
     )
     .max(50)

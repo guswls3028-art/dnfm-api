@@ -622,11 +622,13 @@ const confirmDto = z.object({
   adventurerName: z.string().trim().min(1).max(32).optional(),
   mainCharacterName: z.string().trim().min(1).max(32).optional(),
   mainCharacterClass: z.string().trim().min(1).max(32).optional(),
+  mainCharacterClassGroup: z.string().trim().min(1).max(32).optional(),
   characters: z
     .array(
       z.object({
         name: z.string().trim().min(1).max(32),
         klass: z.string().trim().min(1).max(32),
+        classGroup: z.string().trim().min(1).max(32).optional(),
       }),
     )
     .max(50)
@@ -660,6 +662,9 @@ ocrRoutes.post("/confirm", requireAuth(), zValidator("json", confirmDto), async 
     ...(input.mainCharacterClass !== undefined && {
       mainCharacterClass: input.mainCharacterClass,
     }),
+    ...(input.mainCharacterClassGroup !== undefined && {
+      mainCharacterClassGroup: input.mainCharacterClassGroup,
+    }),
     ...(input.characters !== undefined && { characters: input.characters }),
     verifiedBySelectScreen: verified,
     confirmedAt: new Date().toISOString(),
@@ -676,6 +681,7 @@ ocrRoutes.post("/confirm", requireAuth(), zValidator("json", confirmDto), async 
     adventurerName: nextProfile.adventurerName,
     mainCharacterName: nextProfile.mainCharacterName,
     mainCharacterClass: nextProfile.mainCharacterClass,
+    mainCharacterClassGroup: nextProfile.mainCharacterClassGroup,
     characters: nextProfile.characters,
   });
   if (!profileShape.success) {
@@ -732,10 +738,12 @@ interface AutoBasicInfo {
   adventurerName?: string;
   mainCharacterName?: string;
   mainCharacterClass?: string;
+  mainCharacterClassGroup?: string;
 }
 interface AutoCharacter {
   name: string;
   klass: string;
+  classGroup?: string;
 }
 interface AutoPerImage {
   index: number;
@@ -750,6 +758,7 @@ interface AutoMerged {
   adventurerName?: string;
   mainCharacterName?: string;
   mainCharacterClass?: string;
+  mainCharacterClassGroup?: string;
   characters: AutoCharacter[];
   verifiedBySelectScreen: boolean;
 }
@@ -856,9 +865,8 @@ async function autoClassifyAndExtract(
       mainCharacterClass?: string;
     };
     const rawClass = bi.mainCharacterClass?.trim();
-    const normalizedClass = rawClass
-      ? normalizeClassName(rawClass)?.baseClass ?? rawClass
-      : undefined;
+    const normalizedEntry = rawClass ? normalizeClassName(rawClass) : null;
+    const normalizedClass = normalizedEntry?.baseClass ?? rawClass ?? undefined;
     return {
       index,
       fileName,
@@ -867,6 +875,7 @@ async function autoClassifyAndExtract(
         adventurerName: bi.adventurerName?.trim() || undefined,
         mainCharacterName: bi.mainCharacterName?.trim() || undefined,
         mainCharacterClass: normalizedClass,
+        mainCharacterClassGroup: normalizedEntry?.classGroup,
       },
       raw: rawJson,
     };
@@ -879,7 +888,11 @@ async function autoClassifyAndExtract(
       if (!name) continue;
       const klassRaw = c.klass?.trim();
       const entry = klassRaw ? normalizeClassName(klassRaw) : null;
-      characters.push({ name, klass: entry?.baseClass ?? klassRaw ?? "" });
+      characters.push({
+        name,
+        klass: entry?.baseClass ?? klassRaw ?? "",
+        ...(entry?.classGroup ? { classGroup: entry.classGroup } : {}),
+      });
     }
     return { index, fileName, screenType, characters, raw: rawJson };
   }
@@ -965,6 +978,7 @@ function mergeAutoResults(perImage: AutoPerImage[]): AutoMerged {
     adventurerName: basicInfo?.adventurerName,
     mainCharacterName: basicInfo?.mainCharacterName,
     mainCharacterClass: basicInfo?.mainCharacterClass,
+    mainCharacterClassGroup: basicInfo?.mainCharacterClassGroup,
     characters: uniqueChars,
     verifiedBySelectScreen: verified,
   };

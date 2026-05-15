@@ -69,9 +69,12 @@ export interface DnfProfile {
   mainCharacterName?: string;
   // 대표 캐릭터 직업명 (예: "오버마인드") — basic_info '대표 캐릭터' 박스.
   mainCharacterClass?: string;
+  // 대표 캐릭터 계열 (예: "마법사(여)") — 동명 직업(메카닉/크루세이더 등) 구분용.
+  mainCharacterClassGroup?: string;
   characters?: Array<{
     name: string; // 캐릭터명 (예: "지금간다")
     klass: string; // 직업 (예: "오버마인드") — class 는 JS 예약어라 klass
+    classGroup?: string; // 예: "거너(여)"
   }>;
   // 본인 인증 — 2번(보유캐릭터) ∩ 3번(캐릭터 선택창) overlap 통과 여부.
   // 3번은 게임 로그인 직후만 볼 수 있어 도용 어려움.
