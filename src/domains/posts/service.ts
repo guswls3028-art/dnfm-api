@@ -188,6 +188,7 @@ export async function listPosts(site: SiteCode, query: ListPostsQuery, actorId?:
         author: {
           id: users.id,
           displayName: users.displayName,
+          avatarR2Key: users.avatarR2Key,
           dnfProfile: users.dnfProfile,
         },
       })
@@ -227,6 +228,7 @@ export async function getPostById(site: SiteCode, id: string) {
       author: {
         id: users.id,
         displayName: users.displayName,
+        avatarR2Key: users.avatarR2Key,
         dnfProfile: users.dnfProfile,
       },
     })
