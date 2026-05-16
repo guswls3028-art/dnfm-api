@@ -3,7 +3,6 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { isSiteAdmin } from "../../shared/auth/permissions.js";
 import { AppError } from "../../shared/errors/app-error.js";
-import { getClientIp } from "../../shared/http/client-ip.js";
 import { optionalAuth, requireAuth } from "../../shared/http/middleware/auth.js";
 import { writeRateLimit } from "../../shared/http/middleware/rate-limit.js";
 import { siteFromParam } from "../../shared/http/middleware/site.js";
@@ -43,11 +42,9 @@ import {
 } from "./service.js";
 
 /**
- * 비회원 정책 SSOT: project_anonymous_posting_policy.md (2026-05-14).
- * - entries 참가 = 비회원 가능 (회원 인증 강제 X). authorId null 일 때 anonymousMarker 표기.
- * - 수정/삭제 = guestPassword 본인 검증 또는 어드민.
- *
- * IP 추출은 shared helper `getClientIp` SSOT — cf-connecting-ip 우선.
+ * 정책:
+ * - 콘테스트 참가/투표 = 로그인 계정 기준. 이미지 업로드와 상품 지급 기록을 남긴다.
+ * - 질문/게시판은 별도 정책에 따라 비회원 작성 가능.
  */
 
 const contests = new Hono();
@@ -169,22 +166,19 @@ contests.get(
 
 /**
  * POST /sites/:site/contests/:id/entries — 참가.
- * 회원/비회원 둘 다 허용. 비회원은 dto 의 guestNickname/guestPassword 로.
+ * 이미지 업로드 + 상품 이벤트 기록 때문에 로그인 계정으로만 받는다.
  */
 contests.post(
   "/sites/:site/contests/:id/entries",
-  optionalAuth(),
-  writeRateLimit, // 비회원 spam / 회원 도배 둘 다 방어. posts/comments 와 동일 정책.
+  requireAuth(),
+  writeRateLimit, // 회원 도배 방어. posts/comments 와 동일 write 정책.
   zValidator("json", createEntryDto),
   async (c) => {
     const site = c.get("site");
-    const userId = c.get("userId") ?? null;
+    const userId = c.get("userId");
     const id = requireUuid(c.req.param("id"), "contest_not_found");
     const input = c.req.valid("json");
-    const entry = await createEntry(site, id, userId, input, {
-      ipAddress: getClientIp(c),
-      userAgent: c.req.header("user-agent"),
-    });
+    const entry = await createEntry(site, id, userId, input);
     return created(c, { entry });
   },
 );

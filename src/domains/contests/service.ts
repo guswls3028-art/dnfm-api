@@ -1,10 +1,5 @@
 import { and, asc, count, desc, eq, inArray, isNull, or } from "drizzle-orm";
-import {
-  buildAnonymousAuditHash,
-  buildAnonymousMarker,
-  sanitizeGuestNickname,
-} from "../../shared/anonymous/anonymous.js";
-import { hashPassword, verifyPassword } from "../../shared/crypto/password.js";
+import { verifyPassword } from "../../shared/crypto/password.js";
 import { db } from "../../shared/db/client.js";
 import { AppError } from "../../shared/errors/app-error.js";
 import type { SiteCode } from "../../shared/types/site.js";
@@ -29,11 +24,6 @@ import {
   contestVotes,
   contests,
 } from "./schema.js";
-
-export type RequestContext = {
-  ipAddress?: string;
-  userAgent?: string;
-};
 
 /**
  * 비회원 보안 — 응답 projection. authorPasswordHash (bcrypt) + anonymousAuditHash (sha256)
@@ -395,9 +385,8 @@ export async function deleteContest(site: SiteCode, id: string, actorId: string)
 export async function createEntry(
   site: SiteCode,
   contestId: string,
-  authorId: string | null,
+  authorId: string,
   input: CreateEntryInput,
-  ctx: RequestContext = {},
 ) {
   const contest = await requireContest(site, contestId);
 
@@ -419,30 +408,11 @@ export async function createEntry(
     }
   }
 
-  // 비회원 path — IP marker + bcrypt password + audit hash. posts/comments 와 동일 패턴.
-  const isGuest = !authorId;
-  let guestNickname: string | null = null;
-  let guestPasswordHash: string | null = null;
-  let anonymousMarker: string | null = null;
-  let anonymousAuditHash: string | null = null;
-  if (isGuest) {
-    guestNickname = sanitizeGuestNickname(input.guestNickname);
-    if (input.guestPassword) {
-      guestPasswordHash = await hashPassword(input.guestPassword);
-    }
-    anonymousMarker = buildAnonymousMarker(ctx.ipAddress);
-    anonymousAuditHash = buildAnonymousAuditHash(ctx.ipAddress, ctx.userAgent);
-  }
-
   const inserted = await db
     .insert(contestEntries)
     .values({
       contestId,
       authorId,
-      authorNickname: guestNickname,
-      authorPasswordHash: guestPasswordHash,
-      anonymousMarker,
-      anonymousAuditHash,
       fields: input.fields,
       imageR2Keys: input.imageR2Keys,
     })

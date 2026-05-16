@@ -56,13 +56,13 @@ export const listContestsQuery = z.object({
 export type ListContestsQuery = z.infer<typeof listContestsQuery>;
 
 /**
- * entry 생성. 회원이면 인증으로, 비회원이면 guest 필드로.
+ * entry 생성. 상품/이미지 업로드 이벤트라 로그인 회원만 참가 가능하다.
  * 정책 SSOT: project_anonymous_posting_policy.md (2026-05-14).
  */
 export const createEntryDto = z.object({
   fields: z.record(z.string(), z.unknown()).default({}),
   imageR2Keys: z.array(z.string().max(512)).max(20).default([]),
-  // 비회원 작성용 (디시 스타일). 회원 인증 있으면 무시.
+  // 과거 비회원 참가 클라이언트가 보내도 무시된다. route 에서 requireAuth.
   guestNickname: z.string().trim().min(1).max(32).optional(),
   guestPassword: z.string().min(4).max(128).optional(),
 });
