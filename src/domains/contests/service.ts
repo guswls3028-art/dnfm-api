@@ -1,4 +1,4 @@
-import { and, eq, desc, asc, sql, count, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import {
   buildAnonymousAuditHash,
   buildAnonymousMarker,
@@ -6,24 +6,29 @@ import {
 } from "../../shared/anonymous/anonymous.js";
 import { hashPassword, verifyPassword } from "../../shared/crypto/password.js";
 import { db } from "../../shared/db/client.js";
-import {
-  contests,
-  contestEntries,
-  contestVotes,
-  contestResults,
-  type Contest,
-  type ContestStatus,
-} from "./schema.js";
 import { AppError } from "../../shared/errors/app-error.js";
 import type { SiteCode } from "../../shared/types/site.js";
+import { users } from "../auth/schema.js";
 import type {
-  CreateContestInput,
-  UpdateContestInput,
-  ListContestsQuery,
-  CreateEntryInput,
-  ListEntriesQuery,
   AnnounceResultsInput,
+  CreateContestInput,
+  CreateEntryInput,
+  ListContestsQuery,
+  ListEntriesQuery,
+  UpdateContestInput,
+  UpdateEntryModerationInput,
 } from "./dto.js";
+import {
+  type Contest,
+  type ContestEntry,
+  type ContestEntryStatus,
+  type ContestStatus,
+  auditLogs,
+  contestEntries,
+  contestResults,
+  contestVotes,
+  contests,
+} from "./schema.js";
 
 export type RequestContext = {
   ipAddress?: string;
@@ -64,6 +69,64 @@ function parseOptionalDate(v: string | null | undefined): Date | null | undefine
   return d;
 }
 
+const PUBLIC_ENTRY_STATUSES: ContestEntryStatus[] = ["approved", "winner"];
+const BLOCKED_CONTEST_STATUSES: ContestStatus[] = ["archived", "cancelled"];
+
+const CORE_CONTEST_FIELDS = new Set<keyof UpdateContestInput>([
+  "title",
+  "description",
+  "formSchema",
+  "maxEntries",
+  "entryDeadlineAt",
+  "voteStartAt",
+  "voteEndAt",
+  "coverR2Key",
+  "metadata",
+]);
+
+function hasCoreContestChange(input: UpdateContestInput): boolean {
+  for (const key of CORE_CONTEST_FIELDS) {
+    if (input[key] !== undefined) return true;
+  }
+  return false;
+}
+
+function requireReason(reason: string | undefined, message: string): string {
+  const trimmed = reason?.trim();
+  if (!trimmed) throw AppError.badRequest(message, "reason_required");
+  return trimmed;
+}
+
+function isPublicEntryStatus(status: ContestEntryStatus): boolean {
+  return PUBLIC_ENTRY_STATUSES.includes(status);
+}
+
+function canModerateEntries(status: ContestStatus): boolean {
+  return !BLOCKED_CONTEST_STATUSES.includes(status);
+}
+
+async function writeAuditLog(input: {
+  site: SiteCode;
+  actorId?: string | null;
+  action: string;
+  targetType: string;
+  targetId: string;
+  before?: unknown;
+  after?: unknown;
+  reason?: string | null;
+}) {
+  await db.insert(auditLogs).values({
+    site: input.site,
+    actorId: input.actorId ?? null,
+    action: input.action,
+    targetType: input.targetType,
+    targetId: input.targetId,
+    before: input.before as Record<string, unknown> | undefined,
+    after: input.after as Record<string, unknown> | undefined,
+    reason: input.reason?.trim() || null,
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /* contests CRUD                                                              */
 /* -------------------------------------------------------------------------- */
@@ -99,7 +162,16 @@ export async function createContest(site: SiteCode, actorId: string, input: Crea
       createdBy: actorId,
     })
     .returning();
-  return inserted[0]!;
+  const contest = inserted[0]!;
+  await writeAuditLog({
+    site,
+    actorId,
+    action: "contest.create",
+    targetType: "contest",
+    targetId: contest.id,
+    after: contest,
+  });
+  return contest;
 }
 
 /** 콘테스트 list (사이트별). */
@@ -194,8 +266,39 @@ async function requireContest(site: SiteCode, id: string): Promise<Contest> {
 }
 
 /** 어드민 — 콘테스트 수정. */
-export async function updateContest(site: SiteCode, id: string, input: UpdateContestInput) {
-  await requireContest(site, id);
+export async function updateContest(
+  site: SiteCode,
+  id: string,
+  actorId: string,
+  input: UpdateContestInput,
+) {
+  const before = await requireContest(site, id);
+
+  if (BLOCKED_CONTEST_STATUSES.includes(before.status) && hasCoreContestChange(input)) {
+    throw AppError.badRequest(
+      "보관/취소된 콘테스트의 핵심 정보는 수정할 수 없습니다.",
+      "contest_readonly",
+      { status: before.status },
+    );
+  }
+
+  const coreChanged = hasCoreContestChange(input);
+  const statusChanged = input.status !== undefined && input.status !== before.status;
+  let reason: string | undefined;
+  if (coreChanged && before.status !== "draft") {
+    reason = requireReason(
+      input.reason,
+      "참가 모집 이후 규칙/기간/상품성 정보 수정에는 사유가 필요합니다.",
+    );
+  } else if (
+    statusChanged &&
+    input.status &&
+    ["results", "archived", "cancelled"].includes(input.status)
+  ) {
+    reason = requireReason(input.reason, "결과 발표/보관/취소 상태 변경에는 사유가 필요합니다.");
+  } else if (statusChanged) {
+    reason = input.reason?.trim() || undefined;
+  }
 
   const patch: Partial<typeof contests.$inferInsert> & { updatedAt: Date } = {
     updatedAt: new Date(),
@@ -215,12 +318,13 @@ export async function updateContest(site: SiteCode, id: string, input: UpdateCon
     patch.voteEndAt = parseOptionalDate(input.voteEndAt) ?? null;
   }
   if (input.coverR2Key !== undefined) patch.coverR2Key = input.coverR2Key ?? null;
-  if (input.metadata !== undefined)
-    patch.metadata = input.metadata as Record<string, unknown>;
+  if (input.metadata !== undefined) patch.metadata = input.metadata as Record<string, unknown>;
   if (input.status !== undefined) patch.status = input.status as ContestStatus;
 
-  // sanity — voteStartAt < voteEndAt (effective)
-  if (patch.voteStartAt && patch.voteEndAt && patch.voteStartAt >= patch.voteEndAt) {
+  const effectiveVoteStartAt =
+    patch.voteStartAt !== undefined ? patch.voteStartAt : before.voteStartAt;
+  const effectiveVoteEndAt = patch.voteEndAt !== undefined ? patch.voteEndAt : before.voteEndAt;
+  if (effectiveVoteStartAt && effectiveVoteEndAt && effectiveVoteStartAt >= effectiveVoteEndAt) {
     throw AppError.badRequest(
       "투표 시작 시각이 종료 시각보다 빨라야 합니다.",
       "invalid_vote_window",
@@ -228,7 +332,18 @@ export async function updateContest(site: SiteCode, id: string, input: UpdateCon
   }
 
   const updated = await db.update(contests).set(patch).where(eq(contests.id, id)).returning();
-  return updated[0]!;
+  const after = updated[0]!;
+  await writeAuditLog({
+    site,
+    actorId,
+    action: statusChanged && !coreChanged ? "contest.status.update" : "contest.update",
+    targetType: "contest",
+    targetId: id,
+    before,
+    after,
+    reason,
+  });
+  return after;
 }
 
 /**
@@ -242,8 +357,8 @@ export async function updateContest(site: SiteCode, id: string, input: UpdateCon
  * 지워지는데, entries 는 사용자 작성 데이터. [[domain-policy.md §1]] / [[anti-avoidance.md §8]]
  * 에 따라 자동 destructive 금지.
  */
-export async function deleteContest(site: SiteCode, id: string): Promise<void> {
-  await requireContest(site, id);
+export async function deleteContest(site: SiteCode, id: string, actorId: string): Promise<void> {
+  const before = await requireContest(site, id);
   const entryCount = await db
     .select({ value: count() })
     .from(contestEntries)
@@ -255,6 +370,14 @@ export async function deleteContest(site: SiteCode, id: string): Promise<void> {
     );
   }
   await db.delete(contests).where(eq(contests.id, id));
+  await writeAuditLog({
+    site,
+    actorId,
+    action: "contest.delete",
+    targetType: "contest",
+    targetId: id,
+    before,
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -357,21 +480,29 @@ export async function deleteEntryAsGuest(
   if (!ok) {
     throw AppError.forbidden("비밀번호가 일치하지 않습니다.", "password_mismatch");
   }
-  await db
-    .update(contestEntries)
-    .set({ deletedAt: now() })
-    .where(eq(contestEntries.id, entryId));
+  await db.update(contestEntries).set({ deletedAt: now() }).where(eq(contestEntries.id, entryId));
   return { deleted: true };
 }
 
 /** entry list — 사이트 격리 검증 + 선택 필터. */
-export async function listEntries(site: SiteCode, contestId: string, query: ListEntriesQuery) {
+export async function listEntries(
+  site: SiteCode,
+  contestId: string,
+  query: ListEntriesQuery,
+  options: { includeAll?: boolean } = {},
+) {
   await requireContest(site, contestId);
 
   const filters = [eq(contestEntries.contestId, contestId), isNull(contestEntries.deletedAt)];
+  if (!options.includeAll) {
+    filters.push(inArray(contestEntries.status, PUBLIC_ENTRY_STATUSES));
+  } else if (!query.includeHidden) {
+    filters.push(inArray(contestEntries.status, ["submitted", "approved", "winner"]));
+  }
   if (query.selectedForVote !== undefined) {
     filters.push(eq(contestEntries.selectedForVote, query.selectedForVote));
   }
+  if (query.status) filters.push(eq(contestEntries.status, query.status));
   if (query.authorId) filters.push(eq(contestEntries.authorId, query.authorId));
 
   const offset = (query.page - 1) * query.pageSize;
@@ -397,14 +528,48 @@ export async function listEntries(site: SiteCode, contestId: string, query: List
   };
 }
 
+/** 회원 — 내가 제출한 참가작과 현재 운영 상태. */
+export async function listMyContestEntries(site: SiteCode, userId: string) {
+  const rows = await db
+    .select({
+      entry: contestEntries,
+      contest: contests,
+    })
+    .from(contestEntries)
+    .innerJoin(contests, eq(contests.id, contestEntries.contestId))
+    .where(
+      and(
+        eq(contests.site, site),
+        eq(contestEntries.authorId, userId),
+        isNull(contestEntries.deletedAt),
+      ),
+    )
+    .orderBy(desc(contestEntries.createdAt))
+    .limit(100);
+
+  return rows.map(({ entry, contest }) => ({
+    entry: publicEntry(entry),
+    contest,
+  }));
+}
+
 /** 어드민 — 후보 선정 toggle (selectedForVote). 사용자 entry 내용은 손대지 않음. */
 export async function selectEntryForVote(
   site: SiteCode,
   contestId: string,
   entryId: string,
+  actorId: string,
   selectedForVote: boolean,
+  reason?: string,
 ) {
   const contest = await requireContest(site, contestId);
+  if (!canModerateEntries(contest.status)) {
+    throw AppError.badRequest(
+      "보관/취소된 콘테스트의 참가작은 변경할 수 없습니다.",
+      "contest_readonly",
+      { status: contest.status },
+    );
+  }
 
   const rows = await db
     .select()
@@ -420,17 +585,117 @@ export async function selectEntryForVote(
   const entry = rows[0];
   if (!entry) throw AppError.notFound("entry 를 찾을 수 없습니다.", "entry_not_found");
 
-  void contest; // sanity guard — same contest
+  if (selectedForVote && !isPublicEntryStatus(entry.status)) {
+    throw AppError.badRequest(
+      "승인된 참가작만 투표 후보로 선정할 수 있습니다.",
+      "entry_not_approved",
+      { status: entry.status },
+    );
+  }
 
   const updated = await db
     .update(contestEntries)
     .set({
       selectedForVote,
       selectedAt: selectedForVote ? new Date() : null,
+      updatedAt: new Date(),
     })
     .where(eq(contestEntries.id, entryId))
     .returning();
-  return updated[0]!;
+  const after = updated[0]!;
+  await writeAuditLog({
+    site,
+    actorId,
+    action: selectedForVote ? "contest_entry.select_for_vote" : "contest_entry.unselect_for_vote",
+    targetType: "contest_entry",
+    targetId: entryId,
+    before: entry,
+    after,
+    reason,
+  });
+  return after;
+}
+
+/** 어드민 — 참가작 승인/반려/숨김/실격 등 검수 상태 변경. */
+export async function updateEntryModeration(
+  site: SiteCode,
+  contestId: string,
+  entryId: string,
+  actorId: string,
+  input: UpdateEntryModerationInput,
+) {
+  const contest = await requireContest(site, contestId);
+  if (!canModerateEntries(contest.status)) {
+    throw AppError.badRequest(
+      "보관/취소된 콘테스트의 참가작은 변경할 수 없습니다.",
+      "contest_readonly",
+      { status: contest.status },
+    );
+  }
+
+  const rows = await db
+    .select()
+    .from(contestEntries)
+    .where(
+      and(
+        eq(contestEntries.id, entryId),
+        eq(contestEntries.contestId, contestId),
+        isNull(contestEntries.deletedAt),
+      ),
+    )
+    .limit(1);
+  const entry = rows[0];
+  if (!entry) throw AppError.notFound("entry 를 찾을 수 없습니다.", "entry_not_found");
+
+  const nextStatus = input.status ?? entry.status;
+  const selectedForVote =
+    input.selectedForVote !== undefined ? input.selectedForVote : entry.selectedForVote;
+  const reason =
+    ["rejected", "hidden", "disqualified"].includes(nextStatus) ||
+    entry.status === "winner" ||
+    nextStatus === "winner"
+      ? requireReason(input.reason, "반려/숨김/실격/수상 상태 변경에는 사유가 필요합니다.")
+      : input.reason?.trim() || undefined;
+
+  if (selectedForVote && !isPublicEntryStatus(nextStatus)) {
+    throw AppError.badRequest(
+      "승인된 참가작만 투표 후보로 선정할 수 있습니다.",
+      "entry_not_approved",
+      { status: nextStatus },
+    );
+  }
+
+  const reviewed = input.status !== undefined && input.status !== entry.status;
+  const updated = await db
+    .update(contestEntries)
+    .set({
+      status: nextStatus,
+      selectedForVote,
+      selectedAt:
+        selectedForVote && !entry.selectedForVote
+          ? new Date()
+          : selectedForVote
+            ? entry.selectedAt
+            : null,
+      reviewedBy: reviewed ? actorId : entry.reviewedBy,
+      reviewedAt: reviewed ? new Date() : entry.reviewedAt,
+      statusReason: reason ?? entry.statusReason,
+      updatedAt: new Date(),
+    })
+    .where(eq(contestEntries.id, entryId))
+    .returning();
+  const after = updated[0]!;
+  await writeAuditLog({
+    site,
+    actorId,
+    action: "contest_entry.moderate",
+    targetType: "contest_entry",
+    targetId: entryId,
+    before: entry,
+    after,
+    reason,
+  });
+  return after;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -482,6 +747,11 @@ export async function voteForEntry(
   if (!entry.selectedForVote) {
     throw AppError.badRequest("투표 후보가 아닙니다.", "entry_not_selected");
   }
+  if (!isPublicEntryStatus(entry.status)) {
+    throw AppError.badRequest("공개 승인된 참가작이 아닙니다.", "entry_not_public", {
+      status: entry.status,
+    });
+  }
   if (entry.authorId === voterId) {
     throw AppError.badRequest("본인 작품에는 투표할 수 없습니다.", "self_vote");
   }
@@ -524,6 +794,7 @@ export async function tallyVotes(site: SiteCode, contestId: string) {
       and(
         eq(contestEntries.contestId, contestId),
         eq(contestEntries.selectedForVote, true),
+        inArray(contestEntries.status, PUBLIC_ENTRY_STATUSES),
         isNull(contestEntries.deletedAt),
       ),
     );
@@ -536,6 +807,38 @@ export async function tallyVotes(site: SiteCode, contestId: string) {
     .sort((a, b) => b.votes - a.votes);
 
   return tally;
+}
+
+/** 어드민 — 콘테스트 단위 감사 로그 조회. */
+export async function listContestAuditLogs(
+  site: SiteCode,
+  contestId: string,
+  options: { includeEntries?: boolean; limit?: number } = {},
+) {
+  await requireContest(site, contestId);
+
+  const targetFilters = [
+    and(eq(auditLogs.targetType, "contest"), eq(auditLogs.targetId, contestId)),
+  ];
+  if (options.includeEntries) {
+    const entryRows = await db
+      .select({ id: contestEntries.id })
+      .from(contestEntries)
+      .where(eq(contestEntries.contestId, contestId));
+    const entryIds = entryRows.map((entry) => entry.id);
+    if (entryIds.length > 0) {
+      targetFilters.push(
+        and(eq(auditLogs.targetType, "contest_entry"), inArray(auditLogs.targetId, entryIds)),
+      );
+    }
+  }
+
+  return db
+    .select()
+    .from(auditLogs)
+    .where(and(eq(auditLogs.site, site), or(...targetFilters)))
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(Math.min(Math.max(options.limit ?? 100, 1), 200));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -551,7 +854,52 @@ export async function listResults(site: SiteCode, contestId: string) {
     .from(contestResults)
     .where(eq(contestResults.contestId, contestId))
     .orderBy(asc(contestResults.rank));
-  return rows;
+  if (rows.length === 0) return [];
+
+  const entryIds = rows.map((r) => r.entryId);
+  const entryRows = await db
+    .select()
+    .from(contestEntries)
+    .where(and(eq(contestEntries.contestId, contestId), inArray(contestEntries.id, entryIds)));
+  const entriesById = new Map(entryRows.map((entry) => [entry.id, entry]));
+
+  const userIds = entryRows
+    .map((entry) => entry.authorId)
+    .filter((id): id is string => Boolean(id));
+  const userRows =
+    userIds.length > 0
+      ? await db
+          .select({ id: users.id, displayName: users.displayName })
+          .from(users)
+          .where(inArray(users.id, userIds))
+      : [];
+  const usersById = new Map(userRows.map((user) => [user.id, user.displayName]));
+
+  return rows.map((result) => {
+    const entry = entriesById.get(result.entryId);
+    const fields = (entry?.fields ?? {}) as Record<string, unknown>;
+    const title = typeof fields.title === "string" ? fields.title : "제목 없음";
+    const characterName =
+      typeof fields.characterName === "string" ? fields.characterName : undefined;
+    const adventureName =
+      typeof fields.adventureName === "string" ? fields.adventureName : undefined;
+    const authorName = entry?.authorId
+      ? usersById.get(entry.authorId) || "회원"
+      : entry?.authorNickname ||
+        (entry?.anonymousMarker ? `ㅇㅇ(${entry.anonymousMarker})` : "ㅇㅇ");
+    return {
+      ...result,
+      entry: entry ? publicEntry(entry) : null,
+      fields,
+      title,
+      name: title,
+      characterName,
+      adventureName,
+      by: authorName,
+      author: authorName,
+      comment: result.note,
+    };
+  });
 }
 
 /**
@@ -563,11 +911,35 @@ export async function listResults(site: SiteCode, contestId: string) {
 export async function announceResults(
   site: SiteCode,
   contestId: string,
+  actorId: string,
   input: AnnounceResultsInput,
 ) {
-  await requireContest(site, contestId);
+  const contest = await requireContest(site, contestId);
+  if (BLOCKED_CONTEST_STATUSES.includes(contest.status)) {
+    throw AppError.badRequest(
+      "보관/취소된 콘테스트의 결과는 변경할 수 없습니다.",
+      "contest_readonly",
+      { status: contest.status },
+    );
+  }
 
-  let rankings: Array<{ entryId: string; rank: number; note?: string | undefined }>;
+  const previousResults = await db
+    .select()
+    .from(contestResults)
+    .where(eq(contestResults.contestId, contestId))
+    .orderBy(asc(contestResults.rank));
+  const publishReason =
+    previousResults.length > 0
+      ? requireReason(input.reason, "이미 발표된 결과를 변경하려면 사유가 필요합니다.")
+      : input.reason?.trim() || undefined;
+
+  let rankings: Array<{
+    entryId: string;
+    rank: number;
+    awardName?: string | undefined;
+    note?: string | undefined;
+    reason?: string | undefined;
+  }>;
 
   if (input.auto) {
     const tally = await tallyVotes(site, contestId);
@@ -588,22 +960,38 @@ export async function announceResults(
     rankings = input.rankings.map((r) => ({
       entryId: r.entryId,
       rank: r.rank,
+      awardName: r.awardName,
       note: r.note,
+      reason: r.reason,
     }));
   }
 
   // entry 가 모두 같은 contest 인지 검증
   const entryIds = rankings.map((r) => r.entryId);
   const entryRows = await db
-    .select({ id: contestEntries.id, contestId: contestEntries.contestId })
+    .select({
+      id: contestEntries.id,
+      contestId: contestEntries.contestId,
+      status: contestEntries.status,
+    })
     .from(contestEntries)
     .where(and(eq(contestEntries.contestId, contestId), isNull(contestEntries.deletedAt)));
   const validEntryIds = new Set(entryRows.map((e) => e.id));
+  const publicEntryIds = new Set(
+    entryRows.filter((entry) => isPublicEntryStatus(entry.status)).map((entry) => entry.id),
+  );
   for (const id of entryIds) {
     if (!validEntryIds.has(id)) {
       throw AppError.badRequest(
         "rankings 에 다른 콘테스트의 entry 가 섞여 있습니다.",
         "entry_mismatch",
+        { entryId: id },
+      );
+    }
+    if (!publicEntryIds.has(id)) {
+      throw AppError.badRequest(
+        "승인된 참가작만 결과에 등록할 수 있습니다.",
+        "entry_not_approved",
         { entryId: id },
       );
     }
@@ -619,19 +1007,48 @@ export async function announceResults(
 
   await db.transaction(async (tx) => {
     await tx.delete(contestResults).where(eq(contestResults.contestId, contestId));
+    await tx
+      .update(contestEntries)
+      .set({ status: "approved", updatedAt: new Date() })
+      .where(and(eq(contestEntries.contestId, contestId), eq(contestEntries.status, "winner")));
     await tx.insert(contestResults).values(
       rankings.map((r) => ({
         contestId,
         entryId: r.entryId,
         rank: r.rank,
+        awardName: r.awardName ?? null,
         note: r.note ?? null,
+        reason: r.reason ?? publishReason ?? null,
       })),
     );
+    for (const entryId of entryIds) {
+      await tx
+        .update(contestEntries)
+        .set({
+          status: "winner",
+          reviewedBy: actorId,
+          reviewedAt: new Date(),
+          statusReason: publishReason ?? "결과 발표",
+          updatedAt: new Date(),
+        })
+        .where(eq(contestEntries.id, entryId));
+    }
     await tx
       .update(contests)
-      .set({ status: "completed", updatedAt: new Date() })
+      .set({ status: "results", updatedAt: new Date() })
       .where(eq(contests.id, contestId));
   });
 
-  return listResults(site, contestId);
+  const results = await listResults(site, contestId);
+  await writeAuditLog({
+    site,
+    actorId,
+    action: previousResults.length > 0 ? "contest_results.replace" : "contest_results.publish",
+    targetType: "contest",
+    targetId: contestId,
+    before: { contest, results: previousResults },
+    after: { status: "results", results },
+    reason: publishReason,
+  });
+  return results;
 }

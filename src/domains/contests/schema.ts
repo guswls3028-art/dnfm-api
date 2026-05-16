@@ -1,17 +1,17 @@
 import {
-  pgTable,
-  uuid,
-  varchar,
-  text,
-  timestamp,
+  boolean,
+  index,
   integer,
   jsonb,
-  index,
+  pgTable,
+  text,
+  timestamp,
   unique,
-  boolean,
+  uuid,
+  varchar,
 } from "drizzle-orm/pg-core";
+import type { SITE_CODES } from "../../shared/types/site.js";
 import { users } from "../auth/schema.js";
-import { SITE_CODES } from "../../shared/types/site.js";
 
 /**
  * 콘테스트 ([[hurock]] 핵심 기능, [[newb]] 도 향후 활용 가능).
@@ -26,15 +26,38 @@ import { SITE_CODES } from "../../shared/types/site.js";
  *   entry_fields      entry 가 form_schema 에 따라 채운 값.
  *
  * 상태 라이프사이클:
- *   draft → open → judging → voting → completed
- *   - draft     어드민 작성 중
- *   - open      참가 글 받음
- *   - judging   마감 후 어드민 후보 선정 중
- *   - voting    투표 기간
- *   - completed 결과 발표 끝
+ *   draft → open → closed → judging → voting → results → archived
+ *   - draft      어드민 작성 중
+ *   - open       참가 글 받음
+ *   - closed     접수 마감, 공개 전 검수 가능
+ *   - judging    마감 후 어드민 후보 선정/심사 중
+ *   - voting     투표 기간
+ *   - results    결과 발표 끝
+ *   - archived   읽기 전용 보관
+ *   - cancelled  취소됨
  */
-export const contestStatuses = ["draft", "open", "judging", "voting", "completed"] as const;
+export const contestStatuses = [
+  "draft",
+  "open",
+  "closed",
+  "voting",
+  "judging",
+  "results",
+  "archived",
+  "cancelled",
+] as const;
 export type ContestStatus = (typeof contestStatuses)[number];
+
+export const contestEntryStatuses = [
+  "draft",
+  "submitted",
+  "approved",
+  "rejected",
+  "hidden",
+  "winner",
+  "disqualified",
+] as const;
+export type ContestEntryStatus = (typeof contestEntryStatuses)[number];
 
 export const contests = pgTable(
   "contests",
@@ -64,7 +87,9 @@ export const contests = pgTable(
      *   - frontend 가 detail 페이지에서 동일 키로 읽어 표시.
      *   - schema 확장하지 않고 자유 진화 — 후속에 별도 컬럼화 필요 시 migration 추가.
      */
-    metadata: jsonb("metadata").notNull().default({} as Record<string, unknown>),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default({} as Record<string, unknown>),
     createdBy: uuid("created_by")
       .notNull()
       .references(() => users.id),
@@ -104,12 +129,22 @@ export const contestEntries = pgTable(
     // 어드민이 후보로 선정했는지
     selectedForVote: boolean("selected_for_vote").notNull().default(false),
     selectedAt: timestamp("selected_at", { withTimezone: true }),
+    // 참가작 검수 상태. 공개 목록에는 approved/winner 만 노출한다.
+    status: varchar("status", { length: 16 })
+      .notNull()
+      .default("submitted")
+      .$type<ContestEntryStatus>(),
+    reviewedBy: uuid("reviewed_by").references(() => users.id),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    statusReason: text("status_reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (t) => ({
     contestIdx: index("contest_entries_contest_idx").on(t.contestId, t.createdAt),
     authorIdx: index("contest_entries_author_idx").on(t.authorId),
+    contestStatusIdx: index("contest_entries_contest_status_idx").on(t.contestId, t.status),
   }),
 );
 
@@ -145,7 +180,9 @@ export const contestResults = pgTable(
       .notNull()
       .references(() => contestEntries.id, { onDelete: "cascade" }),
     rank: integer("rank").notNull(),
+    awardName: varchar("award_name", { length: 80 }),
     note: text("note"), // 어드민 코멘트
+    reason: text("reason"), // 수상자 지정/변경 사유
     announcedAt: timestamp("announced_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
@@ -153,7 +190,28 @@ export const contestResults = pgTable(
   }),
 );
 
+export const auditLogs = pgTable(
+  "audit_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    site: varchar("site", { length: 16 }).notNull().$type<(typeof SITE_CODES)[number]>(),
+    actorId: uuid("actor_id").references(() => users.id),
+    action: varchar("action", { length: 64 }).notNull(),
+    targetType: varchar("target_type", { length: 64 }).notNull(),
+    targetId: varchar("target_id", { length: 128 }).notNull(),
+    before: jsonb("before"),
+    after: jsonb("after"),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    siteTargetIdx: index("audit_logs_site_target_idx").on(t.site, t.targetType, t.targetId),
+    actorIdx: index("audit_logs_actor_idx").on(t.actorId, t.createdAt),
+  }),
+);
+
 export type Contest = typeof contests.$inferSelect;
 export type ContestEntry = typeof contestEntries.$inferSelect;
 export type ContestVote = typeof contestVotes.$inferSelect;
 export type ContestResult = typeof contestResults.$inferSelect;
+export type AuditLog = typeof auditLogs.$inferSelect;

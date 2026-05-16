@@ -71,6 +71,20 @@
       "when": 1778741190350,
       "tag": "0009_lethal_lucky_pierre",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1778888240407,
+      "tag": "0010_steep_songbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1778891863311,
+      "tag": "0011_spotty_chronomancer",
+      "breakpoints": true
     }
   ]
 }

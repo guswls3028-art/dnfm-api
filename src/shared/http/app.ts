@@ -1,21 +1,22 @@
-import { Hono } from "hono";
-import { secureHeaders } from "hono/secure-headers";
-import { logger as honoLogger } from "hono/logger";
-import { ZodError } from "zod";
-import { errorsMiddleware } from "./middleware/errors.js";
-import { requestIdMiddleware } from "./middleware/request-id.js";
-import { corsMiddleware } from "./middleware/cors.js";
-import { ok, fail } from "./response.js";
-import { AppError } from "@/shared/errors/app-error.js";
 import { logger } from "@/config/logger.js";
 import authRoutes from "@/domains/auth/routes.js";
-import postsRoutes from "@/domains/posts/routes.js";
+import broadcastOpsRoutes from "@/domains/broadcast_ops/routes.js";
 import commentsRoutes from "@/domains/comments/routes.js";
-import likesRoutes from "@/domains/likes/routes.js";
-import uploadsRoutes from "@/domains/uploads/routes.js";
 import contestsRoutes from "@/domains/contests/routes.js";
 import heroBannersRoutes from "@/domains/hero_banners/routes.js";
+import likesRoutes from "@/domains/likes/routes.js";
+import postsRoutes from "@/domains/posts/routes.js";
 import reportsRoutes from "@/domains/reports/routes.js";
+import uploadsRoutes from "@/domains/uploads/routes.js";
+import { AppError } from "@/shared/errors/app-error.js";
+import { Hono } from "hono";
+import { logger as honoLogger } from "hono/logger";
+import { secureHeaders } from "hono/secure-headers";
+import { ZodError } from "zod";
+import { corsMiddleware } from "./middleware/cors.js";
+import { errorsMiddleware } from "./middleware/errors.js";
+import { requestIdMiddleware } from "./middleware/request-id.js";
+import { fail, ok } from "./response.js";
 
 /**
  * Hono app factory.
@@ -47,6 +48,8 @@ export function createApp() {
   app.route("/", likesRoutes);
   // /sites/:site/contests + entries + votes + results
   app.route("/", contestsRoutes);
+  // /sites/:site/broadcast/* + /sites/:site/draw-sessions
+  app.route("/", broadcastOpsRoutes);
   // /uploads/presigned-put + /uploads/:id/confirm
   app.route("/", uploadsRoutes);
   // /sites/:site/hero-banners (admin CRUD + public list)

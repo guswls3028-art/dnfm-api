@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { siteCodeSchema } from "../../shared/types/site.js";
-import { contestStatuses } from "./schema.js";
+import { contestEntryStatuses, contestStatuses } from "./schema.js";
 
 /**
  * 콘테스트 dto — 어드민 작성용 / 회원 참가용 / 투표 / 결과.
@@ -42,6 +42,7 @@ export const updateContestDto = z.object({
   coverR2Key: z.string().max(512).optional().nullable(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   status: z.enum(contestStatuses).optional(),
+  reason: z.string().trim().min(1).max(500).optional(),
 });
 export type UpdateContestInput = z.infer<typeof updateContestDto>;
 
@@ -80,6 +81,12 @@ export const listEntriesQuery = z.object({
     .transform((v) => v === "true")
     .pipe(z.boolean())
     .optional(),
+  status: z.enum(contestEntryStatuses).optional(),
+  includeHidden: z
+    .string()
+    .transform((v) => v === "true" || v === "1")
+    .pipe(z.boolean())
+    .optional(),
   authorId: z.string().uuid().optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(30),
@@ -89,8 +96,17 @@ export type ListEntriesQuery = z.infer<typeof listEntriesQuery>;
 /** 후보 선정 (admin). 단순 toggle. */
 export const selectForVoteDto = z.object({
   selectedForVote: z.boolean().default(true),
+  reason: z.string().trim().max(500).optional(),
 });
 export type SelectForVoteInput = z.infer<typeof selectForVoteDto>;
+
+/** 참가작 검수/숨김 처리 (admin). */
+export const updateEntryModerationDto = z.object({
+  status: z.enum(contestEntryStatuses).optional(),
+  selectedForVote: z.boolean().optional(),
+  reason: z.string().trim().max(500).optional(),
+});
+export type UpdateEntryModerationInput = z.infer<typeof updateEntryModerationDto>;
 
 /** 투표 (회원, 1인 1표). */
 export const voteDto = z.object({
@@ -117,11 +133,14 @@ export const announceResultsDto = z
         z.object({
           entryId: z.string().uuid(),
           rank: z.number().int().min(1).max(100),
+          awardName: z.string().trim().max(80).optional(),
           note: z.string().trim().max(500).optional(),
+          reason: z.string().trim().max(500).optional(),
         }),
       )
       .max(50)
       .optional(),
+    reason: z.string().trim().max(500).optional(),
   })
   .refine((v) => v.auto || (v.rankings && v.rankings.length > 0), {
     message: "auto=true 이거나 rankings 가 1개 이상이어야 합니다.",

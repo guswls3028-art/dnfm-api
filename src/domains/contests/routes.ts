@@ -3,10 +3,10 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { isSiteAdmin } from "../../shared/auth/permissions.js";
 import { AppError } from "../../shared/errors/app-error.js";
+import { getClientIp } from "../../shared/http/client-ip.js";
 import { optionalAuth, requireAuth } from "../../shared/http/middleware/auth.js";
 import { writeRateLimit } from "../../shared/http/middleware/rate-limit.js";
 import { siteFromParam } from "../../shared/http/middleware/site.js";
-import { getClientIp } from "../../shared/http/client-ip.js";
 import { created, ok } from "../../shared/http/response.js";
 import type { SiteCode } from "../../shared/types/site.js";
 import { requireUuid } from "../../shared/validation/uuid.js";
@@ -20,6 +20,7 @@ import {
   selectForVoteDto,
   siteParam,
   updateContestDto,
+  updateEntryModerationDto,
   voteDto,
 } from "./dto.js";
 import {
@@ -29,12 +30,15 @@ import {
   deleteContest,
   deleteEntryAsGuest,
   getContest,
+  listContestAuditLogs,
   listContests,
   listEntries,
+  listMyContestEntries,
   listResults,
   selectEntryForVote,
   tallyVotes,
   updateContest,
+  updateEntryModeration,
   voteForEntry,
 } from "./service.js";
 
@@ -119,7 +123,7 @@ contests.patch(
     if (!isAdmin) requireAdmin();
     const id = requireUuid(c.req.param("id"), "contest_not_found");
     const input = c.req.valid("json");
-    const contest = await updateContest(site, id, input);
+    const contest = await updateContest(site, id, userId, input);
     return ok(c, { contest });
   },
 );
@@ -131,13 +135,21 @@ contests.delete("/sites/:site/contests/:id", requireAuth(), async (c) => {
   const isAdmin = await resolveIsAdmin(site, userId);
   if (!isAdmin) requireAdmin();
   const id = requireUuid(c.req.param("id"), "contest_not_found");
-  await deleteContest(site, id);
+  await deleteContest(site, id, userId);
   return ok(c, { ok: true });
 });
 
 /* -------------------------------------------------------------------------- */
 /* entries                                                                    */
 /* -------------------------------------------------------------------------- */
+
+/** GET /sites/:site/me/contest-entries — 내가 제출한 참가작 상태. */
+contests.get("/sites/:site/me/contest-entries", requireAuth(), async (c) => {
+  const site = c.get("site");
+  const userId = c.get("userId");
+  const items = await listMyContestEntries(site, userId);
+  return ok(c, { items });
+});
 
 /** GET /sites/:site/contests/:id/entries — entry list. */
 contests.get(
@@ -148,7 +160,9 @@ contests.get(
     const site = c.get("site");
     const id = requireUuid(c.req.param("id"), "contest_not_found");
     const query = c.req.valid("query");
-    const result = await listEntries(site, id, query);
+    const userId = c.get("userId") ?? null;
+    const includeAll = userId ? await resolveIsAdmin(site, userId) : false;
+    const result = await listEntries(site, id, query, { includeAll });
     return ok(c, result);
   },
 );
@@ -209,7 +223,32 @@ contests.post(
     const id = requireUuid(c.req.param("id"), "contest_not_found");
     const entryId = requireUuid(c.req.param("entryId"), "entry_not_found");
     const input = c.req.valid("json");
-    const entry = await selectEntryForVote(site, id, entryId, input.selectedForVote);
+    const entry = await selectEntryForVote(
+      site,
+      id,
+      entryId,
+      userId,
+      input.selectedForVote,
+      input.reason,
+    );
+    return ok(c, { entry });
+  },
+);
+
+/** PATCH /sites/:site/contests/:id/entries/:entryId — 어드민 검수 상태 변경. */
+contests.patch(
+  "/sites/:site/contests/:id/entries/:entryId",
+  requireAuth(),
+  zValidator("json", updateEntryModerationDto),
+  async (c) => {
+    const site = c.get("site");
+    const userId = c.get("userId");
+    const isAdmin = await resolveIsAdmin(site, userId);
+    if (!isAdmin) requireAdmin();
+    const id = requireUuid(c.req.param("id"), "contest_not_found");
+    const entryId = requireUuid(c.req.param("entryId"), "entry_not_found");
+    const input = c.req.valid("json");
+    const entry = await updateEntryModeration(site, id, entryId, userId, input);
     return ok(c, { entry });
   },
 );
@@ -233,12 +272,28 @@ contests.post(
   },
 );
 
-/** GET /sites/:site/contests/:id/tally — 현재 집계 (운영 모니터링용). */
+/** GET /sites/:site/contests/:id/tally — 공개투표 현재 집계. */
 contests.get("/sites/:site/contests/:id/tally", optionalAuth(), async (c) => {
   const site = c.get("site");
   const id = requireUuid(c.req.param("id"), "contest_not_found");
   const tally = await tallyVotes(site, id);
   return ok(c, { tally });
+});
+
+/** GET /sites/:site/contests/:id/audit-logs — 어드민 감사 로그. */
+contests.get("/sites/:site/contests/:id/audit-logs", requireAuth(), async (c) => {
+  const site = c.get("site");
+  const userId = c.get("userId");
+  const isAdmin = await resolveIsAdmin(site, userId);
+  if (!isAdmin) requireAdmin();
+  const id = requireUuid(c.req.param("id"), "contest_not_found");
+  const includeEntries = c.req.query("includeEntries") === "1";
+  const limitRaw = Number(c.req.query("limit") || 100);
+  const logs = await listContestAuditLogs(site, id, {
+    includeEntries,
+    limit: Number.isFinite(limitRaw) ? limitRaw : 100,
+  });
+  return ok(c, { logs });
 });
 
 /* -------------------------------------------------------------------------- */
@@ -265,7 +320,7 @@ contests.post(
     if (!isAdmin) requireAdmin();
     const id = requireUuid(c.req.param("id"), "contest_not_found");
     const input = c.req.valid("json");
-    const results = await announceResults(site, id, input);
+    const results = await announceResults(site, id, userId, input);
     return created(c, { results });
   },
 );
