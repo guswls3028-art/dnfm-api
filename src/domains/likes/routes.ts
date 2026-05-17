@@ -5,7 +5,7 @@ import { likeDto, siteParam } from "./dto.js";
 import { toggleLike } from "./service.js";
 import { ok } from "../../shared/http/response.js";
 import { requireAuth } from "../../shared/http/middleware/auth.js";
-import { siteFromParam } from "../../shared/http/middleware/site.js";
+import { getSite, siteFromParam } from "../../shared/http/middleware/site.js";
 
 const likes = new Hono();
 
@@ -20,9 +20,10 @@ likes.post(
   requireAuth(),
   zValidator("json", likeDto),
   async (c) => {
+    const site = getSite(c);
     const userId = c.get("userId");
     const input = c.req.valid("json");
-    const result = await toggleLike(userId, input);
+    const result = await toggleLike(site, userId, input);
     return ok(c, result);
   },
 );

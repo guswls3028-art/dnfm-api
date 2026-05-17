@@ -14,6 +14,17 @@ import { uploadPurposes } from "./dto.js";
 const uploads = new Hono();
 
 /**
+ * R2 공개 프록시가 서빙해도 되는 key 네임스페이스.
+ * buildR2Key 가 만드는 `<purpose>/<userId-uuid>/<uuid>` 형태만 허용한다.
+ * 이 정규식 밖의 임의 버킷 key(설정/백업/타 네임스페이스)는 프록시 불가 —
+ * 공개 이미지 서빙(글 사진/배너/참가작)은 그대로 동작하면서 임의 객체
+ * 열람만 차단(defense-in-depth).
+ */
+const R2_PUBLIC_KEY_RE = new RegExp(
+  `^(${uploadPurposes.join("|")})/[0-9a-fA-F-]{36}/[0-9a-fA-F-]{36}$`,
+);
+
+/**
  * POST /uploads/presigned-put — presigned PUT URL 발급.
  * 응답: { uploadId, putUrl, r2Key }
  * 사이트 경계는 uploads 자체에 site 컬럼이 없어 적용하지 않음 — 후속 cycle 에서
@@ -116,6 +127,10 @@ uploads.get("/uploads/r2/*", async (c) => {
   const fullPath = c.req.path; // "/uploads/r2/<key...>"
   const key = decodeURIComponent(fullPath.replace(/^\/uploads\/r2\//, ""));
   if (!key) {
+    throw AppError.notFound("키가 없습니다.", "missing_key");
+  }
+  // 업로드 네임스페이스(buildR2Key 형태) 밖의 임의 R2 객체 프록시 차단.
+  if (!R2_PUBLIC_KEY_RE.test(key)) {
     throw AppError.notFound("키가 없습니다.", "missing_key");
   }
   const presigned = await getPresignedGetUrl(key, 3600);
